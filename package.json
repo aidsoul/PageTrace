@@ -1,0 +1,40 @@
+{
+  "name": "pagetrace",
+  "version": "1.0.0",
+  "description": "PageTrace — browser extension for full-text indexing and search of visited pages",
+  "author": "AidSoul <work-aidsoul@outlook.com>",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:firefox": "node build.mjs firefox",
+    "build:chrome": "node build.mjs chrome",
+    "build": "node build.mjs",
+    "dev:firefox": "node build.mjs firefox --watch",
+    "dev:chrome": "node build.mjs chrome --watch",
+    "start:firefox": "node build.mjs firefox && web-ext run --source-dir dist/firefox",
+    "lint": "web-ext lint --source-dir dist/firefox",
+    "type-check": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "dexie": "^4.0.10",
+    "minisearch": "^7.1.0",
+    "webextension-polyfill": "^0.12.0"
+  },
+  "devDependencies": {
+    "@rollup/plugin-commonjs": "^29.0.3",
+    "@rollup/plugin-node-resolve": "^16.0.3",
+    "@rollup/plugin-replace": "^6.0.3",
+    "@rollup/plugin-typescript": "^12.3.0",
+    "@types/webextension-polyfill": "^0.12.2",
+    "fake-indexeddb": "^6.2.5",
+    "rollup": "^4.64.5",
+    "tslib": "^2.8.1",
+    "typescript": "^5.7.3",
+    "vite": "^6.3.5",
+    "vitest": "^5.0.4",
+    "web-ext": "^8.4.0"
+  }
+}

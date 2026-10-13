@@ -1,0 +1,850 @@
+<!DOCTYPE html>
+<html lang="en" data-i18n-page-title="search.pageTitle">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PageTrace Search</title>
+  <style>
+    *, *::before, *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    :root {
+      --bg-main: #111215;
+      --bg-card: #181A1F;
+      --bg-card-hover: #1E2129;
+      --bg-row-active: #1E2129;
+      --border-card: #2A2D35;
+      --border-divider: #202228;
+      --accent: #F4FF2B;
+      --accent-text: #111215;
+      --text-main: #ECEEF2;
+      --text-muted: #7E838F;
+      --text-hover: #C5C8D1;
+    }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: var(--bg-main);
+      color: var(--text-main);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Inter, 'Helvetica Neue', sans-serif;
+      font-size: 13.5px;
+      line-height: 1.5;
+      user-select: none;
+    }
+
+    .container {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+      background: var(--bg-main);
+    }
+
+    /* Top Search Bar Header */
+    .header-bar {
+      padding: 16px 20px 12px;
+      background: var(--bg-main);
+      flex-shrink: 0;
+    }
+
+    .search-pill {
+      display: flex;
+      align-items: center;
+      background: var(--bg-card);
+      border: 1px solid var(--border-card);
+      border-radius: 9999px;
+      padding: 8px 16px;
+      gap: 10px;
+      transition: border-color 0.15s ease;
+    }
+
+    .search-pill:focus-within {
+      border-color: #7E838F;
+      box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.05);
+    }
+
+    .search-icon {
+      color: var(--text-muted);
+      width: 17px;
+      height: 17px;
+      flex-shrink: 0;
+    }
+
+    .search-input {
+      flex: 1;
+      background: transparent;
+      border: none;
+      outline: none;
+      color: var(--text-main);
+      font-size: 15px;
+      font-family: inherit;
+      caret-color: var(--accent);
+      min-width: 0;
+    }
+
+    .search-input::placeholder {
+      color: var(--text-muted);
+      font-size: 14.5px;
+    }
+
+    .clear-btn {
+      background: rgba(255, 255, 255, 0.06);
+      border: none;
+      color: var(--text-muted);
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      cursor: pointer;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+      line-height: 1;
+      transition: all 0.15s;
+    }
+
+    .clear-btn:hover {
+      background: rgba(255, 255, 255, 0.14);
+      color: #FFFFFF;
+    }
+
+    .clear-btn.visible {
+      display: flex;
+    }
+
+    /* Filter Tabs & Sort Toolbar */
+    .filter-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 0 20px 10px;
+      background: var(--bg-main);
+      flex-shrink: 0;
+    }
+
+    .filter-tabs {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex: 1;
+      min-width: 0;
+      overflow-x: auto;
+      scrollbar-width: none;
+    }
+
+    .filter-tabs::-webkit-scrollbar {
+      display: none;
+    }
+
+    .filter-controls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-shrink: 0;
+    }
+
+    .type-wrap,
+    .date-wrap,
+    .visits-wrap,
+    .sort-wrap {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      flex-shrink: 0;
+    }
+
+    .type-icon,
+    .date-icon,
+    .visits-icon,
+    .sort-icon {
+      position: absolute;
+      left: 10px;
+      width: 13px;
+      height: 13px;
+      color: var(--text-muted);
+      pointer-events: none;
+      transition: color 0.15s ease;
+    }
+
+    .type-select,
+    .date-select,
+    .visits-select,
+    .sort-select {
+      background-color: var(--bg-card);
+      border: 1px solid var(--border-card);
+      color: var(--text-muted);
+      font-size: 12px;
+      font-weight: 500;
+      font-family: inherit;
+      padding: 5px 24px 5px 28px;
+      border-radius: 9999px;
+      cursor: pointer;
+      outline: none;
+      appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%237E838F' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 8px center;
+      background-size: 11px;
+      transition: all 0.15s ease;
+    }
+
+    .type-select:hover,
+    .date-select:hover,
+    .visits-select:hover,
+    .sort-select:hover {
+      color: var(--text-hover);
+      border-color: #3B3F4A;
+      background-color: var(--bg-card-hover);
+    }
+
+    .type-wrap:hover .type-icon,
+    .date-wrap:hover .date-icon,
+    .visits-wrap:hover .visits-icon,
+    .sort-wrap:hover .sort-icon {
+      color: var(--text-hover);
+    }
+
+    .type-select.active,
+    .date-select.active,
+    .visits-select.active,
+    .sort-select.active {
+      background-color: rgba(244, 255, 43, 0.14);
+      border-color: rgba(244, 255, 43, 0.45);
+      color: var(--accent);
+      font-weight: 600;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23F4FF2B' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    }
+
+    .type-wrap.active .type-icon,
+    .date-wrap.active .date-icon,
+    .visits-wrap.active .visits-icon,
+    .sort-wrap.active .sort-icon {
+      color: var(--accent);
+    }
+
+    .type-select option,
+    .date-select option,
+    .visits-select option,
+    .sort-select option {
+      background: var(--bg-card);
+      color: var(--text-main);
+      font-weight: 400;
+    }
+
+    .pt-tag-badge.clickable,
+    .result-domain.clickable {
+      cursor: pointer;
+      transition: opacity 0.15s, transform 0.1s;
+    }
+
+    .pt-tag-badge.clickable:hover,
+    .result-domain.clickable:hover {
+      opacity: 0.85;
+      text-decoration: underline;
+    }
+
+    /* Monolithic results list */
+    .results-container {
+      flex: 1;
+      overflow-y: auto;
+      padding: 0;
+      scrollbar-width: thin;
+      scrollbar-color: var(--border-card) transparent;
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+      background: var(--bg-card);
+      margin: 0 20px 14px;
+      border: 1px solid var(--border-card);
+      border-radius: 12px;
+    }
+
+    .results-container::-webkit-scrollbar {
+      width: 6px;
+    }
+
+    .results-container::-webkit-scrollbar-thumb {
+      background: var(--border-card);
+      border-radius: 4px;
+    }
+
+    /* Result Card (monolithic row) */
+    .result-card {
+      background: transparent;
+      border: none;
+      border-bottom: 1px solid var(--border-divider);
+      border-left: 3px solid transparent;
+      border-radius: 0;
+      padding: 12px 18px;
+      cursor: pointer;
+      transition: background 0.1s ease;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .result-card:last-child {
+      border-bottom: none;
+    }
+
+    .result-card:hover,
+    .result-card.selected {
+      background: var(--bg-row-active);
+      border-left-color: var(--accent);
+    }
+
+    .result-card-inner {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      width: 100%;
+    }
+
+    .result-info {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .result-meta-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 11.5px;
+      color: var(--text-muted);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .result-favicon {
+      width: 14px;
+      height: 14px;
+      border-radius: 2px;
+      object-fit: contain;
+      flex-shrink: 0;
+      background: var(--border-card);
+    }
+
+    .result-domain {
+      color: var(--text-muted);
+      font-size: 11.5px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+
+    .result-meta-dot {
+      color: #4A4E58;
+      font-size: 9px;
+    }
+
+    .pt-tag-badge {
+      display: inline-flex;
+      align-items: center;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 10.5px;
+      font-weight: 600;
+      padding: 1px 6px;
+      border-radius: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      line-height: 1.35;
+    }
+
+    .result-time {
+      color: var(--text-muted);
+      font-size: 11px;
+    }
+
+    .result-visits {
+      display: inline-flex;
+      align-items: center;
+      gap: 3.5px;
+      color: var(--text-muted);
+      font-size: 11px;
+      padding: 0 4px;
+      border-radius: 4px;
+      background: rgba(255, 255, 255, 0.04);
+      cursor: pointer;
+      transition: color 0.15s, background-color 0.15s;
+    }
+
+    .result-visits:hover {
+      color: var(--text-hover);
+      background: rgba(255, 255, 255, 0.08);
+    }
+
+    .result-title {
+      font-weight: 600;
+      font-size: 14px;
+      color: var(--text-main);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      line-height: 1.35;
+    }
+
+    .result-snippet {
+      font-size: 13px;
+      color: var(--text-muted);
+      line-height: 1.5;
+      overflow: hidden;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      word-break: break-word;
+    }
+
+    .result-snippet mark {
+      background: var(--accent);
+      color: var(--accent-text) !important;
+      border-radius: 1px;
+      padding: 0 3px;
+      font-weight: 600;
+      box-decoration-break: clone;
+      -webkit-box-decoration-break: clone;
+    }
+
+    .result-note {
+      margin-top: 6px;
+      padding: 4px 8px;
+      background: rgba(244, 255, 43, 0.08);
+      border-left: 2px solid var(--accent);
+      border-radius: 4px;
+      font-size: 12px;
+      color: var(--text);
+      line-height: 1.4;
+    }
+
+    .result-thumb-box {
+      width: 60px;
+      height: 60px;
+      border-radius: 6px;
+      background: #111215;
+      border: 1px solid var(--border-card);
+      overflow: hidden;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .result-thumb-img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+
+    .result-file-badge {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      width: 60px;
+      height: 60px;
+      border-radius: 6px;
+      background: rgba(148, 163, 184, 0.12);
+      border: 1px solid rgba(148, 163, 184, 0.25);
+      color: #94A3B8;
+      flex-shrink: 0;
+      gap: 2px;
+    }
+
+    .result-file-badge-icon {
+      font-size: 20px;
+      line-height: 1;
+    }
+
+    .result-file-badge-ext {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      color: #94A3B8;
+    }
+
+    .autocomplete-wrap {
+      position: relative;
+      width: 100%;
+    }
+
+    .autocomplete-dropdown {
+      position: absolute;
+      top: 4px;
+      left: 0;
+      right: 0;
+      background: var(--bg-card);
+      border: 1px solid var(--border-card);
+      border-radius: 10px;
+      box-shadow: 0 12px 36px rgba(0, 0, 0, 0.7);
+      z-index: 100;
+      max-height: 220px;
+      overflow-y: auto;
+      display: none;
+    }
+
+    .autocomplete-dropdown.open {
+      display: block;
+    }
+
+    .autocomplete-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 14px;
+      font-size: 13px;
+      color: var(--text-main);
+      cursor: pointer;
+      transition: background 0.1s;
+      border-bottom: 1px solid var(--border-divider);
+    }
+
+    .autocomplete-item:last-child {
+      border-bottom: none;
+    }
+
+    .autocomplete-item:hover,
+    .autocomplete-item.active {
+      background: var(--bg-card-hover);
+      color: var(--accent);
+    }
+
+    .autocomplete-label {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-weight: 600;
+    }
+
+    .autocomplete-desc {
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    .result-meta-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .result-quick-actions {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      opacity: 0;
+      transition: opacity 0.15s ease;
+      flex-shrink: 0;
+    }
+
+    .result-card:hover .result-quick-actions,
+    .result-card.selected .result-quick-actions {
+      opacity: 1;
+    }
+
+    .result-act-btn {
+      background: var(--bg-main);
+      border: 1px solid var(--border-card);
+      color: var(--text-muted);
+      border-radius: 4px;
+      padding: 3px 6px;
+      font-size: 11px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      transition: all 0.15s ease;
+    }
+
+    .result-act-btn:hover {
+      color: var(--text-main);
+      border-color: #3B3F4A;
+      background: var(--bg-card-hover);
+    }
+
+    .result-act-btn.act-delete:hover {
+      color: #FF5A5A;
+      border-color: rgba(255, 90, 90, 0.4);
+    }
+
+    .result-act-btn.act-blacklist:hover {
+      color: #FFA500;
+      border-color: rgba(255, 165, 0, 0.4);
+    }
+
+    .result-act-btn.act-pin:hover,
+    .result-act-btn.act-pin.active {
+      color: #4DA6FF;
+      border-color: rgba(77, 166, 255, 0.4);
+    }
+
+    .result-act-btn.act-pin.active svg {
+      fill: currentColor;
+    }
+
+    .result-act-btn.copied {
+      color: #55FF88;
+      border-color: rgba(85, 255, 136, 0.4);
+    }
+
+    .result-submatches-toggle {
+      margin-top: 4px;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid var(--border-card);
+      border-radius: 6px;
+      padding: 3px 10px;
+      font-size: 11.5px;
+      color: var(--text-muted);
+      cursor: pointer;
+      transition: all 0.15s ease;
+      align-self: flex-start;
+    }
+
+    .result-submatches-toggle:hover {
+      background: rgba(244, 255, 43, 0.1);
+      border-color: rgba(244, 255, 43, 0.3);
+      color: var(--accent);
+    }
+
+    .result-submatches-list {
+      margin-top: 8px;
+      padding-left: 12px;
+      border-left: 2px solid var(--border-card);
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .result-submatch-item {
+      padding: 6px 10px;
+      background: var(--bg-main);
+      border-radius: 6px;
+      border: 1px solid var(--border-divider);
+      cursor: pointer;
+      transition: background 0.12s, border-color 0.12s;
+    }
+
+    .result-submatch-item:hover {
+      background: var(--bg-card-hover);
+      border-color: #383D47;
+    }
+
+    .result-submatch-snippet {
+      font-size: 12.5px;
+      color: var(--text-muted);
+      line-height: 1.45;
+    }
+
+    .result-submatch-snippet mark {
+      background: var(--accent);
+      color: var(--accent-text) !important;
+      padding: 0 2px;
+      border-radius: 1px;
+      font-weight: 600;
+    }
+
+    /* Empty state */
+    .empty-state {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 64px 20px;
+      color: var(--text-muted);
+      text-align: center;
+      gap: 8px;
+    }
+
+    .empty-icon {
+      font-size: 32px;
+      opacity: 0.5;
+      margin-bottom: 4px;
+    }
+
+    /* Footer status bar */
+    .footer-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 20px;
+      background: var(--bg-card);
+      border-top: 1px solid var(--border-card);
+      font-size: 11.5px;
+      color: var(--text-muted);
+      flex-shrink: 0;
+    }
+
+    .footer-count {
+      color: var(--text-muted);
+      font-weight: 500;
+    }
+
+    .footer-hints {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+    }
+
+    .footer-hint-item {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    kbd {
+      background: var(--bg-main);
+      border: 1px solid var(--border-card);
+      border-radius: 3px;
+      padding: 1px 5px;
+      font-size: 10.5px;
+      color: var(--text-muted);
+      font-family: inherit;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header-bar">
+      <div class="search-pill">
+        <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="11" cy="11" r="8"></circle>
+          <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+        </svg>
+        <input
+          type="text"
+          class="search-input"
+          id="searchInput"
+          data-i18n-placeholder="search.placeholder"
+          placeholder="Search saved pages…"
+          autocomplete="off"
+          spellcheck="false"
+          autofocus
+        />
+        <button class="clear-btn" id="clearBtn" data-i18n-title="search.clearTitle" title="Clear">✕</button>
+      </div>
+      <div class="autocomplete-wrap">
+        <div class="autocomplete-dropdown" id="autocompleteDropdown" role="listbox" aria-label="Suggestions"></div>
+      </div>
+    </div>
+
+    <div class="filter-toolbar">
+      <div class="type-wrap" id="typeWrap">
+        <svg class="type-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
+          <polyline points="2 17 12 22 22 17"></polyline>
+          <polyline points="2 12 12 17 22 12"></polyline>
+        </svg>
+        <select
+          class="type-select"
+          id="typeSelect"
+          data-i18n-title="search.typeLabel"
+          data-i18n-aria-label="search.typeLabel"
+          title="Content type"
+          aria-label="Content type"
+        >
+          <option value="all" id="typeOptAll" data-i18n="search.tabAll">All</option>
+          <option value="text" id="typeOptText" data-i18n="search.tabText">Text</option>
+          <option value="tag" id="typeOptTag" data-i18n="search.tabTag">Tags / Indexes</option>
+          <option value="media" id="typeOptMedia" data-i18n="search.tabMedia">Media / Files</option>
+        </select>
+      </div>
+
+      <div class="filter-controls">
+        <div class="date-wrap" id="dateWrap">
+          <svg class="date-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+            <line x1="16" y1="2" x2="16" y2="6"></line>
+            <line x1="8" y1="2" x2="8" y2="6"></line>
+            <line x1="3" y1="10" x2="21" y2="10"></line>
+          </svg>
+          <select
+            class="date-select"
+            id="dateSelect"
+            data-i18n-title="search.dateLabel"
+            data-i18n-aria-label="search.dateLabel"
+            title="Date range"
+            aria-label="Date range"
+          >
+            <option value="all" data-i18n="search.dateAll">All time</option>
+            <option value="today" data-i18n="search.dateToday">Today</option>
+            <option value="week" data-i18n="search.dateWeek">7 days</option>
+            <option value="month" data-i18n="search.dateMonth">30 days</option>
+          </select>
+        </div>
+
+        <div class="visits-wrap" id="visitsWrap">
+          <svg class="visits-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+            <circle cx="12" cy="12" r="3"></circle>
+          </svg>
+          <select
+            class="visits-select"
+            id="visitsSelect"
+            data-i18n-title="search.visitsLabel"
+            data-i18n-aria-label="search.visitsLabel"
+            title="Visits"
+            aria-label="Visits"
+          >
+            <option value="all" data-i18n="search.visitsAll">All visits</option>
+            <option value="multiple" data-i18n="search.visitsMultiple">Visited &gt; 1</option>
+            <option value="frequent" data-i18n="search.visitsFrequent">Frequent (≥ 3)</option>
+            <option value="once" data-i18n="search.visitsOnce">Single visit (= 1)</option>
+          </select>
+        </div>
+
+        <div class="sort-wrap" id="sortWrap">
+          <svg class="sort-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="m3 16 4 4 4-4"></path>
+            <path d="M7 20V4"></path>
+            <path d="m21 8-4-4-4 4"></path>
+            <path d="M17 4v16"></path>
+          </svg>
+          <select
+            class="sort-select"
+            id="sortSelect"
+            data-i18n-title="search.sortLabel"
+            data-i18n-aria-label="search.sortLabel"
+            title="Sort order"
+            aria-label="Sort order"
+          >
+            <option value="relevance" data-i18n="search.sortRelevance">Relevance</option>
+            <option value="newest" data-i18n="search.sortNewest">Newest first</option>
+            <option value="oldest" data-i18n="search.sortOldest">Oldest first</option>
+            <option value="title_asc" data-i18n="search.sortTitleAsc">Title (A–Z)</option>
+            <option value="title_desc" data-i18n="search.sortTitleDesc">Title (Z–A)</option>
+            <option value="visits_desc" data-i18n="search.sortVisitsDesc">Most visited</option>
+            <option value="visits_asc" data-i18n="search.sortVisitsAsc">Least visited</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <div class="results-container" id="resultsContainer">
+      <div class="empty-state">
+        <span class="empty-icon">🔍</span>
+        <span data-i18n="search.emptyInitial">Type a query to search history and page content</span>
+      </div>
+    </div>
+
+    <div class="footer-bar">
+      <span class="footer-count" id="footerCount" data-i18n="search.footerCountZero">0 results</span>
+      <div class="footer-hints">
+        <span class="footer-hint-item"><kbd>↑</kbd><kbd>↓</kbd> <span data-i18n="search.hintSelect">select</span></span>
+        <span class="footer-hint-item"><kbd>↵</kbd> <span data-i18n="search.hintOpen">open</span></span>
+        <span class="footer-hint-item"><kbd>Esc</kbd> <span data-i18n="search.hintClose">close</span></span>
+      </div>
+    </div>
+  </div>
+
+  <script src="search.js"></script>
+</body>
+</html>

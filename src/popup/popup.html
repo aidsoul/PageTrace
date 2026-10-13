@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en" data-i18n-page-title="popup.pageTitle">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PageTrace</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      width: 290px;
+      background: #111215;
+      color: #ECEEF2;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Inter, sans-serif;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 14px 16px;
+      border-bottom: 1px solid #2A2D35;
+    }
+
+    .logo { width: 26px; height: 26px; }
+
+    .title {
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: -0.3px;
+      color: #ECEEF2;
+    }
+
+    .badge {
+      margin-left: auto;
+      font-size: 10px;
+      background: rgba(244, 255, 43, 0.12);
+      color: #F4FF2B;
+      border: 1px solid rgba(244, 255, 43, 0.25);
+      border-radius: 6px;
+      padding: 2px 8px;
+      font-weight: 600;
+    }
+
+    .content {
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .open-search-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      width: 100%;
+      background: #F4FF2B;
+      color: #111215;
+      border: none;
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-size: 13.5px;
+      font-weight: 600;
+      font-family: inherit;
+      cursor: pointer;
+      box-shadow: 0 4px 14px rgba(244, 255, 43, 0.2);
+      transition: all 0.15s ease;
+    }
+
+    .open-search-btn:hover {
+      background: #E8F322;
+      transform: translateY(-1px);
+      box-shadow: 0 6px 18px rgba(244, 255, 43, 0.3);
+    }
+
+    .open-search-btn:active {
+      transform: translateY(0);
+    }
+
+    .shortcut-hint {
+      text-align: center;
+      font-size: 11.5px;
+      color: #7E838F;
+    }
+
+    kbd {
+      background: #181A1F;
+      border: 1px solid #2A2D35;
+      border-radius: 4px;
+      padding: 2px 5px;
+      font-size: 11px;
+      color: #7E838F;
+      font-family: inherit;
+    }
+
+    .footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 16px;
+      border-top: 1px solid #2A2D35;
+    }
+
+    .footer-btn {
+      background: transparent;
+      border: none;
+      color: #7E838F;
+      font-size: 12px;
+      cursor: pointer;
+      padding: 4px 8px;
+      border-radius: 6px;
+      font-family: inherit;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      transition: color 0.15s, background 0.15s;
+    }
+
+    .footer-btn:hover {
+      color: #C5C8D1;
+      background: rgba(255, 255, 255, 0.04);
+    }
+
+    .footer-author {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      font-size: 10.5px;
+      line-height: 1.3;
+      color: #7E838F;
+    }
+
+    .footer-author strong {
+      color: #C5C8D1;
+      font-weight: 600;
+    }
+
+    .footer-author-email {
+      color: #7E838F;
+      text-decoration: none;
+      transition: color 0.15s;
+    }
+
+    .footer-author-email:hover {
+      color: #F4FF2B;
+      text-decoration: underline;
+    }
+
+    .snooze-card {
+      background: #181A1F;
+      border: 1px solid #2A2D35;
+      border-radius: 8px;
+      padding: 10px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .snooze-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 11.5px;
+    }
+
+    .snooze-title {
+      color: #7E838F;
+      font-weight: 500;
+    }
+
+    .snooze-status {
+      font-weight: 600;
+      color: #F4FF2B;
+    }
+
+    .snooze-status.paused {
+      color: #F59E0B;
+    }
+
+    .snooze-actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1.3fr;
+      gap: 6px;
+    }
+
+    .snooze-actions.has-resume {
+      grid-template-columns: 1fr 1fr 1.2fr 1fr;
+    }
+
+    .snooze-btn {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      color: #C5C8D1;
+      border-radius: 6px;
+      padding: 5px 4px;
+      font-size: 11px;
+      font-weight: 500;
+      font-family: inherit;
+      cursor: pointer;
+      text-align: center;
+      transition: all 0.15s ease;
+      white-space: nowrap;
+    }
+
+    .snooze-btn:hover {
+      background: rgba(255, 255, 255, 0.1);
+      color: #ECEEF2;
+      border-color: rgba(255, 255, 255, 0.15);
+    }
+
+    .snooze-btn.active {
+      background: rgba(245, 158, 11, 0.15);
+      border-color: rgba(245, 158, 11, 0.4);
+      color: #FBBF24;
+    }
+
+    .snooze-btn-resume {
+      background: rgba(244, 255, 43, 0.12);
+      border-color: rgba(244, 255, 43, 0.3);
+      color: #F4FF2B;
+      font-weight: 600;
+    }
+
+    .snooze-btn-resume:hover {
+      background: rgba(244, 255, 43, 0.2);
+      color: #FFFFFF;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <img class="logo" src="icons/icon128.svg" alt="PageTrace" />
+    <span class="title">PageTrace</span>
+    <span class="badge" id="statusBadge">ON</span>
+  </div>
+
+  <div class="content">
+    <button class="open-search-btn" id="openSearchBtn">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="11" cy="11" r="8"></circle>
+        <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+      </svg>
+      <span data-i18n="popup.searchBtn">Search Window</span>
+    </button>
+    <div class="shortcut-hint">
+      <span data-i18n="popup.shortcutPrefix">Shortcut:</span>
+      <span id="shortcutKeys"><kbd>Alt</kbd> + <kbd>Shift</kbd> + <kbd>F</kbd></span>
+    </div>
+
+    <div class="snooze-card">
+      <div class="snooze-header">
+        <span class="snooze-title" data-i18n="popup.snoozeSectionTitle">Indexing:</span>
+        <span class="snooze-status" id="indexingStatusText">Active</span>
+      </div>
+      <div class="snooze-actions" id="snoozeActions">
+        <button type="button" class="snooze-btn" id="snooze15Btn" data-i18n="popup.snooze15m">15m</button>
+        <button type="button" class="snooze-btn" id="snooze60Btn" data-i18n="popup.snooze1h">1h</button>
+        <button type="button" class="snooze-btn" id="snoozeRestartBtn" data-i18n="popup.snoozeRestart">Until restart</button>
+        <button type="button" class="snooze-btn snooze-btn-resume" id="resumeBtn" data-i18n="popup.resumeIndexing" style="display:none;">Resume</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="footer">
+    <button class="footer-btn" id="openOptions">⚙ <span data-i18n="popup.optionsBtn">Settings</span></button>
+    <div class="footer-author">
+      <div><span data-i18n="popup.authorLabel">Author:</span> <strong>AidSoul</strong></div>
+      <a class="footer-author-email" href="mailto:work-aidsoul@outlook.com">work-aidsoul@outlook.com</a>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
