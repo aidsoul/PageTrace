@@ -13,6 +13,7 @@
     "dev:firefox": "node build.mjs firefox --watch",
     "dev:chrome": "node build.mjs chrome --watch",
     "start:firefox": "node build.mjs firefox && web-ext run --source-dir dist/firefox",
+    "package:firefox": "npm run build:firefox && web-ext build --source-dir dist/firefox --artifacts-dir dist/artifacts --overwrite-dest",
     "lint": "web-ext lint --source-dir dist/firefox",
     "type-check": "tsc --noEmit",
     "test": "vitest run",
