@@ -276,6 +276,20 @@ export async function upsertPage(
 
   const rev = bumpDbRevision();
   searchSyncHooks?.onPageUpserted?.(savedPage, savedChunks, savedMedia, rev);
+  void checkProactiveCleanup();
+}
+
+let upsertCountSinceCleanup = 0;
+
+async function checkProactiveCleanup(): Promise<void> {
+  upsertCountSinceCleanup++;
+  if (upsertCountSinceCleanup < 30) return;
+  upsertCountSinceCleanup = 0;
+  try {
+    const s = await getSettings();
+    const limitMb = s.maxSizeMb || 150;
+    await evictLRU(limitMb, s.pinnedDomains);
+  } catch {}
 }
 
 // Update lastAccessedAt when a page is opened from search results

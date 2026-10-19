@@ -1,6 +1,6 @@
 {
   "name": "pagetrace",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "PageTrace — browser extension for full-text indexing and search of visited pages",
   "author": "AidSoul <work-aidsoul@outlook.com>",
   "license": "MIT",

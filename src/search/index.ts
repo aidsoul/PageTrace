@@ -89,6 +89,12 @@ let allSearchDocs: SearchDoc[] = [];
 let indexedDocCount = 0;
 let indexedRevision = -1;
 
+function sanitizeFavicon(raw?: string): string {
+  if (!raw) return '';
+  if (raw.startsWith('data:') && raw.length > 1024) return '';
+  return raw;
+}
+
 function getMiniSearchOptions(): MiniSearchOptions<SearchDoc> {
   return {
     fields: ['tagName', 'text', 'title', 'note'],
@@ -96,8 +102,6 @@ function getMiniSearchOptions(): MiniSearchOptions<SearchDoc> {
       'numericId',
       'pageId',
       'url',
-      'hostnameLower',
-      'urlLower',
       'title',
       'favicon',
       'text',
@@ -105,8 +109,6 @@ function getMiniSearchOptions(): MiniSearchOptions<SearchDoc> {
       'selector',
       'type',
       'tagName',
-      'tagNameLower',
-      'normTags',
       'tags',
       'createdAt',
       'visitCount',
@@ -115,6 +117,12 @@ function getMiniSearchOptions(): MiniSearchOptions<SearchDoc> {
       fuzzy: 0.2,
       prefix: true,
       boost: { tagName: 10.0, title: 2.0, note: 1.5 },
+    },
+    autoVacuum: {
+      minDirtFactor: 0.1,
+      minDirtCount: 10,
+      batchSize: 500,
+      batchWait: 10,
     },
     tokenize: (text) => {
       // Split words for both Cyrillic and Latin text
@@ -185,7 +193,7 @@ function buildCustomTagDoc(tag: CustomTagIndex, page?: PageRecord): SearchDoc {
     hostnameLower: extractHostnameLower(url),
     urlLower: url.toLowerCase(),
     title: tag.pageTitle || page?.title || '',
-    favicon: tag.favicon || page?.favicon || '',
+    favicon: sanitizeFavicon(tag.favicon || page?.favicon),
     text: tag.text,
     note: tag.note || undefined,
     selector: tag.selector,
@@ -228,7 +236,7 @@ function buildPageChunkAndMediaDocs(
       hostnameLower,
       urlLower,
       title: page.title,
-      favicon: page.favicon,
+      favicon: sanitizeFavicon(page.favicon),
       text: chunk.text,
       selector: chunk.selector,
       type: 'text',
@@ -257,7 +265,7 @@ function buildPageChunkAndMediaDocs(
       hostnameLower,
       urlLower,
       title: page.title,
-      favicon: page.favicon,
+      favicon: sanitizeFavicon(page.favicon),
       text: mediaText,
       selector: item.url,
       type: 'media',
@@ -329,7 +337,7 @@ export async function rebuildIndex(
       hostnameLower: pageMeta?.hostnameLower ?? extractHostnameLower(page.url),
       urlLower: pageMeta?.urlLower ?? page.url.toLowerCase(),
       title: page.title,
-      favicon: page.favicon,
+      favicon: sanitizeFavicon(page.favicon),
       text: chunk.text,
       selector: chunk.selector,
       type: 'text',
@@ -360,7 +368,7 @@ export async function rebuildIndex(
       hostnameLower: pageMeta?.hostnameLower ?? extractHostnameLower(page.url),
       urlLower: pageMeta?.urlLower ?? page.url.toLowerCase(),
       title: page.title,
-      favicon: page.favicon,
+      favicon: sanitizeFavicon(page.favicon),
       text: mediaText,
       selector: item.url,
       type: 'media',
@@ -444,6 +452,9 @@ export function upsertPageInIndex(
   if (revision !== undefined) {
     indexedRevision = revision;
   }
+  if (searchIndex && typeof searchIndex.vacuum === 'function' && (searchIndex.dirtFactor ?? 0) > 0.15) {
+    void searchIndex.vacuum();
+  }
 }
 
 export function upsertCustomIndexInSearch(
@@ -487,6 +498,9 @@ export function removeCustomIndexesFromSearch(tagIds: number[], revision?: numbe
   if (revision !== undefined) {
     indexedRevision = revision;
   }
+  if (searchIndex && typeof searchIndex.vacuum === 'function' && (searchIndex.dirtFactor ?? 0) > 0.15) {
+    void searchIndex.vacuum();
+  }
 }
 
 export function removePagesFromIndex(
@@ -516,6 +530,9 @@ export function removePagesFromIndex(
   if (revision !== undefined) {
     indexedRevision = revision;
   }
+  if (searchIndex && typeof searchIndex.vacuum === 'function' && (searchIndex.dirtFactor ?? 0) > 0.15) {
+    void searchIndex.vacuum();
+  }
 }
 
 export function clearSearchIndex(revision?: number): void {
@@ -531,12 +548,20 @@ export function clearSearchIndex(revision?: number): void {
 
 export function serializeSearchIndex(revision = indexedRevision): SerializedSearchIndexSnapshot | null {
   if (!searchIndex) return null;
-  return {
-    version: 1,
-    revision,
-    indexJson: JSON.stringify(searchIndex.toJSON()),
-    docs: allSearchDocs,
-  };
+  try {
+    const json = JSON.stringify(searchIndex.toJSON());
+    if (json.length > 2.5 * 1024 * 1024) {
+      return null;
+    }
+    return {
+      version: 1,
+      revision,
+      indexJson: json,
+      docs: allSearchDocs,
+    };
+  } catch {
+    return null;
+  }
 }
 
 export function hydrateSearchIndex(snapshot: unknown): boolean {

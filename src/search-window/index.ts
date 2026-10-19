@@ -351,8 +351,14 @@ async function loadIndex(force = false): Promise<void> {
       const serialized = serializeSearchIndex(rev);
       if (serialized) {
         try {
-          browser.storage.local.set({ pt_search_cache: serialized }).catch(() => {});
-        } catch {}
+          browser.storage.local.set({ pt_search_cache: serialized }).catch(() => {
+            browser.storage.local.remove('pt_search_cache').catch(() => {});
+          });
+        } catch {
+          browser.storage.local.remove('pt_search_cache').catch(() => {});
+        }
+      } else {
+        browser.storage.local.remove('pt_search_cache').catch(() => {});
       }
     }
 

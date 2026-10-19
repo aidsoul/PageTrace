@@ -150,7 +150,7 @@ export const DEFAULT_SETTINGS: UserSettings = {
   whitelist: [],
   pinnedDomains: [],
   ttlDays: 30,
-  maxSizeMb: 500,
+  maxSizeMb: 150,
   hotkey: 'Alt+Shift+F',
   enabled: true,
   searchMaxResults: 100,
