@@ -10,14 +10,17 @@ import { initOverlayInShadow, showOverlayInShadow } from '@/overlay/index';
 declare const __BROWSER__: string;
 
 const DEBOUNCE_MS = 1000;
-const THROTTLE_MS = 3000;
+const THROTTLE_MS = 4000;
+const MAX_PAGE_CHUNKS = 300;
+const MAX_CHUNK_TEXT_LENGTH = 1500;
+const MAX_PAGE_MEDIA = 60;
 
 let hasIndexed = false;
 let observerStarted = false;
 let mutationThrottle: ReturnType<typeof setTimeout> | null = null;
 let mutationLastRun = 0;
 let lastParsedUrl = '';
-let lastBodyTextLength = -1;
+let pendingAddedNodes = 0;
 
 function isIncognito(): boolean {
   try {
@@ -131,8 +134,21 @@ window.addEventListener(
   true,
 );
 
-// MutationObserver for SPA and infinite scroll updates
-const observer = new MutationObserver(() => {
+function scheduleParseIfChanged(): void {
+  const currentUrl = normalizeContentUrl(location.href);
+  const isNewUrl = currentUrl !== lastParsedUrl;
+
+  if (hasIndexed && !isNewUrl && pendingAddedNodes < 15) {
+    return;
+  }
+  pendingAddedNodes = 0;
+  void parsePage();
+}
+
+const observer = new MutationObserver((mutations) => {
+  for (let i = 0; i < mutations.length; i++) {
+    pendingAddedNodes += mutations[i]!.addedNodes.length;
+  }
   const now = Date.now();
   if (now - mutationLastRun < THROTTLE_MS) {
     if (!mutationThrottle) {
@@ -148,16 +164,6 @@ const observer = new MutationObserver(() => {
   scheduleParseIfChanged();
 });
 
-function scheduleParseIfChanged(): void {
-  const currentUrl = normalizeContentUrl(location.href);
-  const currentLen = document.body?.textContent?.length ?? 0;
-  // Skip DOM traversal if URL is unchanged and text length changed by less than 32 chars
-  if (hasIndexed && currentUrl === lastParsedUrl && Math.abs(currentLen - lastBodyTextLength) < 32) {
-    return;
-  }
-  void parsePage();
-}
-
 function startMutationObserver(): void {
   if (observerStarted) return;
   const target = document.body ?? document.documentElement;
@@ -167,6 +173,13 @@ function startMutationObserver(): void {
   observer.observe(target, {
     childList: true,
     subtree: true,
+  });
+
+  window.addEventListener('popstate', () => {
+    scheduleParseIfChanged();
+  });
+  window.addEventListener('hashchange', () => {
+    scheduleParseIfChanged();
   });
 }
 
@@ -211,7 +224,6 @@ async function parsePage(): Promise<void> {
     const favicon = getFavicon();
 
     lastParsedUrl = url;
-    lastBodyTextLength = document.body?.textContent?.length ?? 0;
 
     const chunks = extractTextChunks(indexDepth, url, customTags, siteTagRules);
     const media = indexMedia ? extractMedia(url, mediaWhitelist) : [];
@@ -304,6 +316,29 @@ function getMatchingSiteTags(url: string, siteRules: SiteTagRule[] = []): string
   return null;
 }
 
+function splitTextIntoChunks(text: string, maxLen: number): string[] {
+  const result: string[] = [];
+  let remaining = text;
+  while (remaining.length > maxLen) {
+    let splitIdx = remaining.lastIndexOf('\n', maxLen);
+    if (splitIdx < maxLen * 0.5) {
+      splitIdx = remaining.lastIndexOf('. ', maxLen);
+      if (splitIdx !== -1) splitIdx += 1;
+    }
+    if (splitIdx < maxLen * 0.5) {
+      splitIdx = remaining.lastIndexOf(' ', maxLen);
+    }
+    if (splitIdx <= 0) {
+      splitIdx = maxLen;
+    }
+    const part = remaining.slice(0, splitIdx).trim();
+    if (part) result.push(part);
+    remaining = remaining.slice(splitIdx).trim();
+  }
+  if (remaining) result.push(remaining);
+  return result;
+}
+
 function extractTextChunks(
   depth: IndexDepth,
   url: string,
@@ -314,10 +349,27 @@ function extractTextChunks(
   const seenTexts = new Set<string>();
 
   const pushUniqueChunk = (el: Element, rawText: string, level: number): void => {
-    const norm = normalizeSearchText(rawText);
+    if (chunks.length >= MAX_PAGE_CHUNKS) return;
+    const trimmed = rawText.trim();
+    if (!trimmed) return;
+
+    if (trimmed.length > MAX_CHUNK_TEXT_LENGTH) {
+      const subChunks = splitTextIntoChunks(trimmed, MAX_CHUNK_TEXT_LENGTH);
+      const selector = getCSSSelector(el);
+      for (const sub of subChunks) {
+        if (chunks.length >= MAX_PAGE_CHUNKS) break;
+        const norm = normalizeSearchText(sub);
+        if (!norm || seenTexts.has(norm)) continue;
+        seenTexts.add(norm);
+        chunks.push({ text: sub, selector, depth: level });
+      }
+      return;
+    }
+
+    const norm = normalizeSearchText(trimmed);
     if (!norm || seenTexts.has(norm)) return;
     seenTexts.add(norm);
-    chunks.push({ text: rawText, selector: getCSSSelector(el), depth: level });
+    chunks.push({ text: trimmed, selector: getCSSSelector(el), depth: level });
   };
 
   // Check if this site has custom selector rules
@@ -479,8 +531,10 @@ function extractMedia(
     if (!url) return;
     const absUrl = absoluteUrl(url, pageUrl);
     if (seen.has(absUrl)) return;
+    if (absUrl.startsWith('data:') && absUrl.length > 1024) return;
     const ext = getExt(absUrl);
     if (!allowedExts.has(ext)) return;
+    if (items.length >= MAX_PAGE_MEDIA) return;
     seen.add(absUrl);
     items.push({
       type: 'image',
@@ -847,7 +901,12 @@ function getFavicon(): string {
   const link =
     document.querySelector<HTMLLinkElement>('link[rel="icon"]') ||
     document.querySelector<HTMLLinkElement>('link[rel="shortcut icon"]');
-  if (link?.href) return link.href;
+  if (link?.href) {
+    if (link.href.startsWith('data:') && link.href.length > 1024) {
+      return `${location.origin}/favicon.ico`;
+    }
+    return link.href;
+  }
   return `${location.origin}/favicon.ico`;
 }
 
@@ -881,7 +940,9 @@ function absoluteUrl(url: string, base: string): string {
 function getCSSSelector(el: Element): string {
   const parts: string[] = [];
   let current: Element | null = el;
-  while (current && current !== document.body) {
+  let depth = 0;
+  while (current && current !== document.body && depth < 5) {
+    depth++;
     let selector = current.tagName.toLowerCase();
     if (current.id) {
       selector += `#${CSS.escape(current.id)}`;
@@ -892,19 +953,21 @@ function getCSSSelector(el: Element): string {
     if (parentEl) {
       const children = parentEl.children;
       const targetTag = current.tagName;
-      let sameTagCount = 0;
-      let selfIndex = 0;
-      for (let i = 0; i < children.length; i++) {
-        const sibling = children[i]!;
-        if (sibling.tagName === targetTag) {
-          sameTagCount++;
-          if (sibling === current) {
-            selfIndex = sameTagCount;
+      if (children.length > 1 && children.length <= 60) {
+        let sameTagCount = 0;
+        let selfIndex = 0;
+        for (let i = 0; i < children.length; i++) {
+          const sibling = children[i]!;
+          if (sibling.tagName === targetTag) {
+            sameTagCount++;
+            if (sibling === current) {
+              selfIndex = sameTagCount;
+            }
           }
         }
-      }
-      if (sameTagCount > 1 && selfIndex > 0) {
-        selector += `:nth-of-type(${selfIndex})`;
+        if (sameTagCount > 1 && selfIndex > 0) {
+          selector += `:nth-of-type(${selfIndex})`;
+        }
       }
     }
     parts.unshift(selector);

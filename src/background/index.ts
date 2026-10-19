@@ -54,13 +54,18 @@ function scheduleSearchCachePersist(): void {
   cachePersistTimer = setTimeout(() => {
     cachePersistTimer = null;
     const snapshot = serializeSearchIndex(getLocalDbRevision());
-    if (!snapshot) return;
-    try {
-      browser.storage.local.set({ [SEARCH_CACHE_STORAGE_KEY]: snapshot }).catch(() => {});
-    } catch {
-      // Ignore storage quota or availability errors
+    if (!snapshot) {
+      browser.storage.local.remove(SEARCH_CACHE_STORAGE_KEY).catch(() => {});
+      return;
     }
-  }, 500);
+    try {
+      browser.storage.local.set({ [SEARCH_CACHE_STORAGE_KEY]: snapshot }).catch(() => {
+        browser.storage.local.remove(SEARCH_CACHE_STORAGE_KEY).catch(() => {});
+      });
+    } catch {
+      browser.storage.local.remove(SEARCH_CACHE_STORAGE_KEY).catch(() => {});
+    }
+  }, 1200);
 }
 
 async function ensureBackgroundSearchIndex(): Promise<void> {
