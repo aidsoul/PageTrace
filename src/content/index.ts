@@ -3,7 +3,7 @@ import type { IndexDepth, IndexPageMessage, MediaItem, SiteTagRule, TextChunk, U
 import { getLocale, DEFAULT_LANGUAGE } from '@/i18n/index';
 import { setSafeHtml, matchUrlPattern } from '@/common/tags';
 import { getSettings, matchesHotkey } from '@/common/settings';
-import { initOverlayInShadow, showOverlayInShadow } from '@/overlay/index';
+import { initOverlayInShadow, showOverlayInShadow, closeOverlay } from '@/overlay/index';
 
 // Content script: DOM parser, indexer, and in-page UI
 
@@ -128,7 +128,7 @@ window.addEventListener(
     if (matchesHotkey(e, cachedHotkey)) {
       e.preventDefault();
       e.stopPropagation();
-      browser.runtime.sendMessage({ type: 'OPEN_SEARCH_WINDOW' }).catch(() => {});
+      toggleOverlay();
     }
   },
   true,
@@ -832,8 +832,15 @@ function showToast(message: string): void {
 
 // Overlay toggle in Shadow DOM
 let overlayLoaded = false;
+let lastToggleTime = 0;
 
 function toggleOverlay(): void {
+  const now = Date.now();
+  if (now - lastToggleTime < 300) {
+    return;
+  }
+  lastToggleTime = now;
+
   if (!overlayLoaded) {
     injectOverlay();
     return;
@@ -841,9 +848,11 @@ function toggleOverlay(): void {
   const host = document.getElementById('pagetrace-overlay-host');
   if (host) {
     const isHiddenNow = host.style.display === 'none';
-    host.style.display = isHiddenNow ? 'block' : 'none';
     if (isHiddenNow) {
+      host.style.display = 'block';
       void showOverlayInShadow();
+    } else {
+      closeOverlay();
     }
   }
 }

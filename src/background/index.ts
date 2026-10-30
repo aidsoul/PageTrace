@@ -267,95 +267,62 @@ browser.alarms.onAlarm.addListener(async (alarm) => {
   }
 });
 
-// Open search window on keyboard shortcut
+async function openSearchInTab(): Promise<void> {
+  const searchUrl = browser.runtime.getURL('search.html');
+  try {
+    const tabs = await browser.tabs.query({ currentWindow: true });
+    const existing = tabs.find((t) => t.url && t.url.includes('search.html'));
+    if (existing?.id) {
+      await browser.tabs.update(existing.id, { active: true });
+      return;
+    }
+    await browser.tabs.create({ url: searchUrl, active: true });
+  } catch (err) {
+    console.error('[PageTrace] Failed to open search tab:', err);
+  }
+}
+
+async function toggleOverlayOrOpenTab(): Promise<void> {
+  try {
+    const tabs = await browser.tabs.query({ active: true, currentWindow: true });
+    const activeTab = tabs[0];
+    if (
+      activeTab?.id &&
+      activeTab.url &&
+      !activeTab.url.startsWith('about:') &&
+      !activeTab.url.startsWith('chrome:') &&
+      !activeTab.url.startsWith('edge:') &&
+      !activeTab.url.startsWith('moz-extension:')
+    ) {
+      await browser.tabs.sendMessage(activeTab.id, { type: 'TOGGLE_OVERLAY' });
+      return;
+    }
+  } catch (err) {
+    console.warn('[PageTrace] Could not toggle in-page overlay, falling back to tab:', err);
+  }
+  await openSearchInTab();
+}
+
 browser.commands.onCommand.addListener(async (command) => {
   if (command === 'toggle-overlay') {
     const settings = await getSettings();
     if (!settings.enabled) return;
-    await openSearchWindow();
+    await toggleOverlayOrOpenTab();
   }
 });
-
-let openSearchPromise: Promise<void> | null = null;
-let lastOpenSearchTime = 0;
-
-async function openSearchWindow(): Promise<void> {
-  const now = Date.now();
-  if (now - lastOpenSearchTime < 250) {
-    return;
-  }
-  if (openSearchPromise) {
-    return openSearchPromise;
-  }
-  lastOpenSearchTime = now;
-
-  openSearchPromise = (async () => {
-    const width = 680;
-    const height = 580;
-
-    try {
-      // Focus existing search window if already open
-      const allWindows = await browser.windows.getAll({ populate: true });
-      for (const win of allWindows) {
-        if (win.tabs?.some((t) => t.url && t.url.includes('search.html'))) {
-          await browser.windows.update(win.id!, { focused: true });
-          return;
-        }
-      }
-    } catch (err) {
-      console.warn('[PageTrace] Could not check existing windows:', err);
-    }
-
-    // Center popup relative to the last focused browser window
-    let left: number | undefined;
-    let top: number | undefined;
-
-    try {
-      const lastFocused = await browser.windows.getLastFocused();
-      if (lastFocused && lastFocused.width && lastFocused.height) {
-        const winLeft = lastFocused.left ?? 0;
-        const winTop = lastFocused.top ?? 0;
-        left = Math.max(0, Math.round(winLeft + (lastFocused.width - width) / 2));
-        top = Math.max(0, Math.round(winTop + (lastFocused.height - height) / 2));
-      }
-    } catch (err) {
-      console.warn('[PageTrace] Could not determine last focused window coordinates:', err);
-    }
-
-    const searchUrl = browser.runtime.getURL('search.html');
-
-    try {
-      await browser.windows.create({
-        url: searchUrl,
-        type: 'popup',
-        width,
-        height,
-        left,
-        top,
-        focused: true,
-      });
-    } catch (err) {
-      console.error('[PageTrace] Failed to create popup window, opening in tab:', err);
-      try {
-        await browser.tabs.create({ url: searchUrl, active: true });
-      } catch {
-        // ignore
-      }
-    }
-  })().finally(() => {
-    openSearchPromise = null;
-  });
-
-  return openSearchPromise;
-}
 
 // Handle messages from content scripts and UI views
 browser.runtime.onMessage.addListener(
   (rawMessage: unknown, sender: Runtime.MessageSender): Promise<unknown> | true | undefined => {
     const message = rawMessage as ExtensionMessage | { type: string };
 
-    if (message.type === 'OPEN_SEARCH_WINDOW') {
-      openSearchWindow().catch((e) => console.error(e));
+    if (message.type === 'OPEN_SEARCH_WINDOW' || message.type === 'TOGGLE_OVERLAY') {
+      toggleOverlayOrOpenTab().catch((e) => console.error(e));
+      return undefined;
+    }
+
+    if (message.type === 'OPEN_SEARCH_TAB') {
+      openSearchInTab().catch((e) => console.error(e));
       return undefined;
     }
 

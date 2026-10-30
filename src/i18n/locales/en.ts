@@ -169,7 +169,7 @@ export const en: LocaleTranslations = {
   },
   popup: {
     pageTitle: 'PageTrace',
-    searchBtn: 'Search Window',
+    searchBtn: 'Search',
     shortcutPrefix: 'Shortcut:',
     optionsBtn: 'Settings',
     authorLabel: 'Author:',
@@ -266,7 +266,15 @@ export const en: LocaleTranslations = {
     emptyInitial: 'Start typing a search query',
     loading: 'Loading index…',
     noResults: 'Nothing found',
-    resultsCount: (count: number) => `${count} ${count === 1 ? 'result' : 'results'}`,
+    resultsCount: (matchesCount: number, pagesCount?: number) => {
+      const pCount = pagesCount ?? matchesCount;
+      const pagesStr = `${pCount} ${pCount === 1 ? 'page' : 'pages'}`;
+      if (matchesCount > pCount) {
+        const matchesStr = `${matchesCount} ${matchesCount === 1 ? 'match' : 'matches'}`;
+        return `${pagesStr} (${matchesStr})`;
+      }
+      return pagesStr;
+    },
     hintNavigate: 'navigate',
     hintOpen: 'open',
     hintClose: 'close',

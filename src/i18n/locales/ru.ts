@@ -178,7 +178,7 @@ export const ru: LocaleTranslations = {
   },
   popup: {
     pageTitle: 'PageTrace',
-    searchBtn: 'Окно поиска',
+    searchBtn: 'Поиск',
     shortcutPrefix: 'Горячие клавиши:',
     optionsBtn: 'Настройки',
     authorLabel: 'Автор:',
@@ -275,7 +275,15 @@ export const ru: LocaleTranslations = {
     emptyInitial: 'Начните вводить запрос для поиска',
     loading: 'Загрузка индекса…',
     noResults: 'Ничего не найдено',
-    resultsCount: (count: number) => `${count} ${pluralRu(count, 'результат', 'результата', 'результатов')}`,
+    resultsCount: (matchesCount: number, pagesCount?: number) => {
+      const pCount = pagesCount ?? matchesCount;
+      const pagesStr = `${pCount} ${pluralRu(pCount, 'страница', 'страницы', 'страниц')}`;
+      if (matchesCount > pCount) {
+        const matchesStr = `${matchesCount} ${pluralRu(matchesCount, 'совпадение', 'совпадения', 'совпадений')}`;
+        return `${pagesStr} (${matchesStr})`;
+      }
+      return pagesStr;
+    },
     hintNavigate: 'навигация',
     hintOpen: 'открыть',
     hintClose: 'закрыть',

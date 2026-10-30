@@ -265,7 +265,7 @@ export interface LocaleTranslations {
     emptyInitial: string;
     loading: string;
     noResults: string;
-    resultsCount: (count: number) => string;
+    resultsCount: (matchesCount: number, pagesCount?: number) => string;
     hintNavigate: string;
     hintOpen: string;
     hintClose: string;

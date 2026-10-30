@@ -116,6 +116,32 @@ const OVERLAY_CSS = `
     font-family: inherit;
   }
 
+  .pt-clear-btn {
+    background: rgba(255, 255, 255, 0.08);
+    border: none;
+    color: #7E838F;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    cursor: pointer;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    line-height: 1;
+    transition: all 0.15s ease;
+    flex-shrink: 0;
+  }
+
+  .pt-clear-btn:hover {
+    background: rgba(255, 255, 255, 0.16);
+    color: #ECEEF2;
+  }
+
+  .pt-clear-btn.visible {
+    display: flex;
+  }
+
   .pt-autocomplete-wrap {
     position: relative;
     width: 100%;
@@ -177,99 +203,79 @@ const OVERLAY_CSS = `
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 8px;
-    padding: 6px 20px;
-    border-bottom: 1px solid #2A2D35;
-    background: #181A1F;
+    gap: 10px;
+    padding: 8px 18px;
+    border-bottom: 1px solid #242730;
+    background: #14161A;
   }
 
-  .pt-filter-controls {
+  .pt-filter-group {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
+  }
+
+  .pt-filter-group-left {
+    flex: 1;
+    min-width: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .pt-filter-group-left::-webkit-scrollbar {
+    display: none;
+  }
+
+  .pt-filter-group-right {
     flex-shrink: 0;
   }
 
-  .pt-type-wrap,
-  .pt-date-wrap,
-  .pt-sort-wrap {
-    position: relative;
+  .pt-pill-wrap {
     display: inline-flex;
     align-items: center;
     flex-shrink: 0;
   }
 
-  .pt-type-icon,
-  .pt-date-icon,
-  .pt-sort-icon {
-    position: absolute;
-    left: 9px;
-    width: 13px;
-    height: 13px;
-    color: #7E838F;
-    pointer-events: none;
-    transition: color 0.15s;
-  }
-
-  .pt-type-select,
-  .pt-date-select,
-  .pt-visits-select,
-  .pt-sort-select {
-    background-color: #111215;
-    border: 1px solid #2A2D35;
-    color: #7E838F;
+  .pt-pill-select {
+    background-color: #1A1D24;
+    border: 1px solid #2B2F3A;
+    color: #8C92A0;
     font-size: 12px;
     font-weight: 500;
     font-family: inherit;
-    padding: 4px 22px 4px 26px;
+    padding: 5px 24px 5px 10px;
     border-radius: 6px;
     cursor: pointer;
     outline: none;
     appearance: none;
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%237E838F' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
     background-repeat: no-repeat;
-    background-position: right 6px center;
-    background-size: 11px;
-    transition: all 0.15s;
+    background-position: right 8px center;
+    background-size: 10px;
+    transition: all 0.15s ease;
+    white-space: nowrap;
   }
 
-  .pt-type-select:hover,
-  .pt-date-select:hover,
-  .pt-visits-select:hover,
-  .pt-sort-select:hover {
-    color: #C5C8D1;
-    border-color: #3B3F4A;
+  .pt-pill-select:hover {
+    color: #ECEEF2;
+    border-color: #3F4452;
+    background-color: #21252E;
   }
 
-  .pt-type-wrap:hover .pt-type-icon,
-  .pt-date-wrap:hover .pt-date-icon,
-  .pt-visits-wrap:hover .pt-visits-icon,
-  .pt-sort-wrap:hover .pt-sort-icon {
-    color: #C5C8D1;
+  .pt-pill-select:focus-visible {
+    border-color: #F4FF2B;
+    box-shadow: 0 0 0 1px rgba(244, 255, 43, 0.25);
   }
 
-  .pt-type-select.active,
-  .pt-date-select.active,
-  .pt-visits-select.active,
-  .pt-sort-select.active {
-    background-color: rgba(244, 255, 43, 0.12);
-    border-color: rgba(244, 255, 43, 0.45);
+  .pt-pill-select.active {
+    background-color: rgba(244, 255, 43, 0.1);
+    border-color: rgba(244, 255, 43, 0.4);
     color: #F4FF2B;
     font-weight: 600;
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23F4FF2B' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
   }
 
-  .pt-type-wrap.active .pt-type-icon,
-  .pt-date-wrap.active .pt-date-icon,
-  .pt-visits-wrap.active .pt-visits-icon,
-  .pt-sort-wrap.active .pt-sort-icon {
-    color: #F4FF2B;
-  }
-
-  .pt-type-select option,
-  .pt-date-select option,
-  .pt-visits-select option,
-  .pt-sort-select option {
+  .pt-pill-select option {
     background: #181A1F;
     color: #ECEEF2;
     font-weight: 400;
@@ -711,7 +717,9 @@ export async function showOverlayInShadow(): Promise<void> {
   } catch {}
   void refreshSuggestionsData();
   const input = shadowRoot?.querySelector<HTMLInputElement>('.pt-search-input');
+  const clearBtn = shadowRoot?.querySelector<HTMLButtonElement>('.pt-clear-btn');
   if (input) {
+    clearBtn?.classList.toggle('visible', input.value.length > 0);
     void performSearch(input.value);
     input.focus();
     input.select();
@@ -756,6 +764,7 @@ function buildModalHTML(): string {
           spellcheck="false"
           aria-label="Search query"
         />
+        <button class="pt-clear-btn" type="button" aria-label="Clear">✕</button>
         <div class="pt-kbd">
           <kbd>Esc</kbd>
         </div>
@@ -764,33 +773,22 @@ function buildModalHTML(): string {
         <div class="pt-autocomplete" role="listbox" aria-label="${escapeAttr(t.overlay.autocompleteHint)}"></div>
       </div>
       <div class="pt-tabs">
-        <div class="pt-type-wrap ${activeTab !== 'all' ? 'active' : ''}">
-          <svg class="pt-type-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-            <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
-            <polyline points="2 17 12 22 22 17"></polyline>
-            <polyline points="2 12 12 17 22 12"></polyline>
-          </svg>
-          <select
-            class="pt-type-select ${activeTab !== 'all' ? 'active' : ''}"
-            title="${escapeAttr(t.overlay.typeLabel)}"
-            aria-label="${escapeAttr(t.overlay.typeLabel)}"
-          >
-            <option value="all" id="pt-type-opt-all" ${activeTab === 'all' ? 'selected' : ''}>${escapeHtml(t.overlay.tabAll)}</option>
-            <option value="text" id="pt-type-opt-text" ${activeTab === 'text' ? 'selected' : ''}>${escapeHtml(t.overlay.tabText)}</option>
-            <option value="tag" id="pt-type-opt-tag" ${activeTab === 'tag' ? 'selected' : ''}>${escapeHtml(t.overlay.tabTag)}</option>
-            <option value="media" id="pt-type-opt-media" ${activeTab === 'media' ? 'selected' : ''}>${escapeHtml(t.overlay.tabMedia)}</option>
-          </select>
-        </div>
-        <div class="pt-filter-controls">
-          <div class="pt-date-wrap ${activePeriod !== 'all' ? 'active' : ''}">
-            <svg class="pt-date-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-              <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>
-              <line x1="16" y1="2" x2="16" y2="6"/>
-              <line x1="8" y1="2" x2="8" y2="6"/>
-              <line x1="3" y1="10" x2="21" y2="10"/>
-            </svg>
+        <div class="pt-filter-group pt-filter-group-left">
+          <div class="pt-pill-wrap ${activeTab !== 'all' ? 'active' : ''}">
             <select
-              class="pt-date-select ${activePeriod !== 'all' ? 'active' : ''}"
+              class="pt-type-select pt-pill-select ${activeTab !== 'all' ? 'active' : ''}"
+              title="${escapeAttr(t.overlay.typeLabel)}"
+              aria-label="${escapeAttr(t.overlay.typeLabel)}"
+            >
+              <option value="all" id="pt-type-opt-all" ${activeTab === 'all' ? 'selected' : ''}>${escapeHtml(t.overlay.tabAll)}</option>
+              <option value="text" id="pt-type-opt-text" ${activeTab === 'text' ? 'selected' : ''}>${escapeHtml(t.overlay.tabText)}</option>
+              <option value="tag" id="pt-type-opt-tag" ${activeTab === 'tag' ? 'selected' : ''}>${escapeHtml(t.overlay.tabTag)}</option>
+              <option value="media" id="pt-type-opt-media" ${activeTab === 'media' ? 'selected' : ''}>${escapeHtml(t.overlay.tabMedia)}</option>
+            </select>
+          </div>
+          <div class="pt-pill-wrap ${activePeriod !== 'all' ? 'active' : ''}">
+            <select
+              class="pt-date-select pt-pill-select ${activePeriod !== 'all' ? 'active' : ''}"
               title="${escapeAttr(t.overlay.dateLabel)}"
               aria-label="${escapeAttr(t.overlay.dateLabel)}"
             >
@@ -800,13 +798,9 @@ function buildModalHTML(): string {
               <option value="month" ${activePeriod === 'month' ? 'selected' : ''}>${escapeHtml(t.overlay.dateMonth)}</option>
             </select>
           </div>
-          <div class="pt-visits-wrap ${activeVisits !== 'all' ? 'active' : ''}">
-            <svg class="pt-visits-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
-              <circle cx="12" cy="12" r="3"/>
-            </svg>
+          <div class="pt-pill-wrap ${activeVisits !== 'all' ? 'active' : ''}">
             <select
-              class="pt-visits-select ${activeVisits !== 'all' ? 'active' : ''}"
+              class="pt-visits-select pt-pill-select ${activeVisits !== 'all' ? 'active' : ''}"
               title="${escapeAttr(t.overlay.visitsLabel)}"
               aria-label="${escapeAttr(t.overlay.visitsLabel)}"
             >
@@ -816,12 +810,11 @@ function buildModalHTML(): string {
               <option value="once" ${activeVisits === 'once' ? 'selected' : ''}>${escapeHtml(t.overlay.visitsOnce)}</option>
             </select>
           </div>
-          <div class="pt-sort-wrap ${isCustomSort ? 'active' : ''}">
-            <svg class="pt-sort-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="m3 16 4 4 4-4"/><path d="M7 20V4"/><path d="m21 8-4-4-4 4"/><path d="M17 4v16"/>
-            </svg>
+        </div>
+        <div class="pt-filter-group pt-filter-group-right">
+          <div class="pt-pill-wrap ${isCustomSort ? 'active' : ''}">
             <select
-              class="pt-sort-select ${isCustomSort ? 'active' : ''}"
+              class="pt-sort-select pt-pill-select ${isCustomSort ? 'active' : ''}"
               title="${escapeAttr(t.overlay.sortLabel)}"
               aria-label="${escapeAttr(t.overlay.sortLabel)}"
             >
@@ -943,8 +936,18 @@ function bindModalInteractiveListeners(): void {
   if (!shadowRoot) return;
 
   const input = shadowRoot.querySelector<HTMLInputElement>('.pt-search-input');
+  const clearBtn = shadowRoot.querySelector<HTMLButtonElement>('.pt-clear-btn');
+  clearBtn?.addEventListener('click', () => {
+    if (input) {
+      input.value = '';
+      clearBtn.classList.remove('visible');
+      void performSearch('');
+      input.focus();
+    }
+  });
   input?.addEventListener('input', (e) => {
     const q = (e.target as HTMLInputElement).value;
+    clearBtn?.classList.toggle('visible', q.length > 0);
     const cursorPos = input.selectionStart ?? q.length;
 
     currentTokenInfo = getAutocompleteTokenInfo(q, cursorPos);
@@ -981,7 +984,7 @@ function bindModalInteractiveListeners(): void {
     activeTab = (typeSelect.value as SearchTypeFilter) || 'all';
     const isCustomType = activeTab !== 'all';
     typeSelect.classList.toggle('active', isCustomType);
-    typeWrap?.classList.toggle('active', isCustomType);
+    typeSelect.closest('.pt-pill-wrap')?.classList.toggle('active', isCustomType);
     const inputEl = shadowRoot?.querySelector<HTMLInputElement>('.pt-search-input');
     void performSearch(inputEl?.value ?? '');
     inputEl?.focus();
@@ -993,7 +996,7 @@ function bindModalInteractiveListeners(): void {
     activePeriod = (dateSelect.value as 'all' | 'today' | 'week' | 'month') || 'all';
     const isCustomDate = activePeriod !== 'all';
     dateSelect.classList.toggle('active', isCustomDate);
-    dateWrap?.classList.toggle('active', isCustomDate);
+    dateSelect.closest('.pt-pill-wrap')?.classList.toggle('active', isCustomDate);
     const inputEl = shadowRoot?.querySelector<HTMLInputElement>('.pt-search-input');
     void performSearch(inputEl?.value ?? '');
     inputEl?.focus();
@@ -1005,7 +1008,7 @@ function bindModalInteractiveListeners(): void {
     activeVisits = (visitsSelect.value as 'all' | 'multiple' | 'frequent' | 'once') || 'all';
     const isCustomVisits = activeVisits !== 'all';
     visitsSelect.classList.toggle('active', isCustomVisits);
-    visitsWrap?.classList.toggle('active', isCustomVisits);
+    visitsSelect.closest('.pt-pill-wrap')?.classList.toggle('active', isCustomVisits);
     const inputEl = shadowRoot?.querySelector<HTMLInputElement>('.pt-search-input');
     void performSearch(inputEl?.value ?? '');
     inputEl?.focus();
@@ -1017,7 +1020,7 @@ function bindModalInteractiveListeners(): void {
     activeSort = (sortSelect.value as SearchSortOption) || 'relevance';
     const isCustomSort = activeSort !== 'relevance';
     sortSelect.classList.toggle('active', isCustomSort);
-    sortWrap?.classList.toggle('active', isCustomSort);
+    sortSelect.closest('.pt-pill-wrap')?.classList.toggle('active', isCustomSort);
     const inputEl = shadowRoot?.querySelector<HTMLInputElement>('.pt-search-input');
     void performSearch(inputEl?.value ?? '');
     inputEl?.focus();
@@ -1167,11 +1170,19 @@ async function performSearch(query: string): Promise<void> {
 function updateTabCounts(visible: boolean, inlineTypeOverride?: SearchTypeFilter): void {
   if (!shadowRoot) return;
   const t = getLocale(currentLang);
+  const getUniquePagesCount = (results: SearchResult[]): number => {
+    const urls = new Set<string>();
+    for (const r of results) {
+      urls.add(normalizePageUrl(r.url));
+    }
+    return urls.size;
+  };
+
   const counts: Record<SearchTypeFilter, number> = {
-    all: allResults.length,
-    text: allResults.filter((r) => r.type === 'text').length,
-    tag: allResults.filter((r) => r.type === 'tag').length,
-    media: allResults.filter((r) => r.type === 'media').length,
+    all: getUniquePagesCount(allResults),
+    text: getUniquePagesCount(allResults.filter((r) => r.type === 'text')),
+    tag: getUniquePagesCount(allResults.filter((r) => r.type === 'tag')),
+    media: getUniquePagesCount(allResults.filter((r) => r.type === 'media')),
   };
 
   const getOptLabel = (label: string, count: number): string => {
@@ -1368,7 +1379,10 @@ function renderResults(): void {
 
   const countEl = shadowRoot.querySelector('#pt-count');
   if (countEl) {
-    countEl.textContent = filteredResults.length > 0 ? t.overlay.resultsCount(filteredResults.length) : '';
+    countEl.textContent =
+      filteredResults.length > 0
+        ? t.overlay.resultsCount(filteredResults.length, groupedResults.length)
+        : '';
   }
 
   if (groupedResults.length === 0) {
@@ -1553,7 +1567,7 @@ function openResult(r: SearchResult): void {
   }
 }
 
-function closeOverlay(): void {
+export function closeOverlay(): void {
   hideAutocompleteDropdown();
   const host = document.getElementById('pagetrace-overlay-host');
   if (host) host.style.display = 'none';
