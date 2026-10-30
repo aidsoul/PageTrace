@@ -547,6 +547,48 @@ const OVERLAY_CSS = `
     gap: 6px;
   }
 
+  .pt-result-body {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    width: 100%;
+  }
+
+  .pt-result-content {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .pt-thumb-box {
+    width: 58px;
+    height: 58px;
+    border-radius: 8px;
+    background: #111215;
+    border: 1px solid #2A2D35;
+    overflow: hidden;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .pt-thumb-img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+    transition: transform 0.15s ease;
+  }
+
+  .pt-result:hover .pt-thumb-img,
+  .pt-result.focused .pt-thumb-img {
+    transform: scale(1.06);
+  }
+
   .pt-submatch-item {
     padding: 6px 10px;
     background: #14161A;
@@ -554,6 +596,34 @@ const OVERLAY_CSS = `
     border: 1px solid #22252C;
     cursor: pointer;
     transition: background 0.12s, border-color 0.12s;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .pt-submatch-thumb {
+    width: 36px;
+    height: 36px;
+    border-radius: 6px;
+    background: #111215;
+    border: 1px solid #2A2D35;
+    overflow: hidden;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .pt-submatch-thumb-img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+
+  .pt-submatch-content {
+    flex: 1;
+    min-width: 0;
   }
 
   .pt-submatch-item:hover {
@@ -1230,6 +1300,12 @@ function createOverlayResultElement(group: GroupedSearchResult, idx: number): HT
     faviconImg.style.display = 'none';
   });
 
+  el.querySelectorAll<HTMLImageElement>('.pt-thumb-img, .pt-submatch-thumb-img').forEach((img) => {
+    img.addEventListener('error', () => {
+      img.parentElement?.remove();
+    });
+  });
+
   const tagTrigger = el.querySelector<HTMLElement>('.pt-tag-trigger');
   tagTrigger?.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -1402,9 +1478,67 @@ function renderResults(): void {
   updateFocus();
 }
 
+function getImagePreviewUrl(result: SearchResult): string | null {
+  const imageExts = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg', 'ico', 'bmp', 'avif']);
+
+  const getExt = (urlStr: string): string => {
+    try {
+      const pathname = new URL(urlStr).pathname;
+      const match = pathname.match(/\.([a-z0-9]+)$/i);
+      return match ? match[1]!.toLowerCase() : '';
+    } catch {
+      const match = urlStr.split('?')[0]?.split('#')[0]?.match(/\.([a-z0-9]+)$/i);
+      return match ? match[1]!.toLowerCase() : '';
+    }
+  };
+
+  const isHttpOrData = (s?: string): boolean =>
+    Boolean(s && (s.startsWith('http://') || s.startsWith('https://') || s.startsWith('data:image/')));
+
+  if (isHttpOrData(result.selector)) {
+    const ext = getExt(result.selector);
+    if (imageExts.has(ext) || result.selector.startsWith('data:image/') || result.type === 'media') {
+      return result.selector;
+    }
+  }
+
+  if (isHttpOrData(result.url)) {
+    const ext = getExt(result.url);
+    if (imageExts.has(ext) || result.url.startsWith('data:image/')) {
+      return result.url;
+    }
+  }
+
+  if (result.type === 'media') {
+    const cand = result.selector || result.url;
+    if (isHttpOrData(cand)) return cand;
+  }
+
+  const trimmed = result.text.trim();
+  if (isHttpOrData(trimmed) && imageExts.has(getExt(trimmed))) {
+    return trimmed;
+  }
+
+  return null;
+}
+
 function buildResultHTML(group: GroupedSearchResult, _i: number): string {
   const r = group.primary;
   const t = getLocale(currentLang);
+  const primaryImgUrl = getImagePreviewUrl(r);
+  const primaryThumbHtml = primaryImgUrl
+    ? `
+      <div class="pt-thumb-box">
+        <img
+          class="pt-thumb-img"
+          src="${escapeAttr(primaryImgUrl)}"
+          alt=""
+          loading="lazy"
+          referrerpolicy="no-referrer"
+        />
+      </div>
+    `
+    : '';
   const domain = (() => { try { return new URL(r.url).hostname; } catch { return r.url; } })();
   const favicon = r.favicon
     ? `<img class="pt-favicon" src="${escapeAttr(r.favicon)}" alt="">`
@@ -1430,14 +1564,31 @@ function buildResultHTML(group: GroupedSearchResult, _i: number): string {
       ? `
       <div class="pt-submatches-list">
         ${group.subMatches
-          .map(
-            (sub, subIdx) => `
-          <div class="pt-submatch-item" data-sub-idx="${subIdx}" title="${escapeAttr(t.overlay.hintOpen)}">
-            <div class="pt-submatch-snippet">${sub.snippet}</div>
-            ${sub.note ? `<div class="pt-result-note"><span class="pt-note-icon">📝</span> ${escapeHtml(sub.note)}</div>` : ''}
-          </div>
-        `,
-          )
+          .map((sub, subIdx) => {
+            const subImgUrl = getImagePreviewUrl(sub);
+            const subThumbHtml = subImgUrl
+              ? `
+                <div class="pt-submatch-thumb">
+                  <img
+                    class="pt-submatch-thumb-img"
+                    src="${escapeAttr(subImgUrl)}"
+                    alt=""
+                    loading="lazy"
+                    referrerpolicy="no-referrer"
+                  />
+                </div>
+              `
+              : '';
+            return `
+              <div class="pt-submatch-item" data-sub-idx="${subIdx}" title="${escapeAttr(t.overlay.hintOpen)}">
+                ${subThumbHtml}
+                <div class="pt-submatch-content">
+                  <div class="pt-submatch-snippet">${sub.snippet}</div>
+                  ${sub.note ? `<div class="pt-result-note"><span class="pt-note-icon">📝</span> ${escapeHtml(sub.note)}</div>` : ''}
+                </div>
+              </div>
+            `;
+          })
           .join('')}
       </div>
     `
@@ -1500,9 +1651,14 @@ function buildResultHTML(group: GroupedSearchResult, _i: number): string {
           </button>
         </div>
       </div>
-      <div class="pt-page-title">${escapeHtml(r.title || domain)}</div>
-      <div class="pt-snippet">${r.snippet}</div>
-      ${r.note ? `<div class="pt-result-note"><span class="pt-note-icon">📝</span> ${escapeHtml(r.note)}</div>` : ''}
+      <div class="pt-result-body">
+        <div class="pt-result-content">
+          <div class="pt-page-title">${escapeHtml(r.title || domain)}</div>
+          <div class="pt-snippet">${r.snippet}</div>
+          ${r.note ? `<div class="pt-result-note"><span class="pt-note-icon">📝</span> ${escapeHtml(r.note)}</div>` : ''}
+        </div>
+        ${primaryThumbHtml}
+      </div>
       ${subMatchesHtml}
     </div>
   `;
