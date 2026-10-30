@@ -774,6 +774,7 @@ export async function initOverlayInShadow(shadow: ShadowRoot): Promise<void> {
 }
 
 export async function showOverlayInShadow(): Promise<void> {
+  lockPageScroll();
   try {
     const s = await getSettings();
     tagCatalog = s.tagCatalog || [];
@@ -796,8 +797,37 @@ export async function showOverlayInShadow(): Promise<void> {
   }
 }
 
+let originalHtmlOverflow: string | null = null;
+let originalBodyOverflow: string | null = null;
+let isScrollLocked = false;
+
+function lockPageScroll(): void {
+  if (isScrollLocked) return;
+  isScrollLocked = true;
+  originalHtmlOverflow = document.documentElement.style.overflow;
+  originalBodyOverflow = document.body ? document.body.style.overflow : '';
+  document.documentElement.style.overflow = 'hidden';
+  if (document.body) {
+    document.body.style.overflow = 'hidden';
+  }
+}
+
+function unlockPageScroll(): void {
+  if (!isScrollLocked) return;
+  isScrollLocked = false;
+  if (originalHtmlOverflow !== null) {
+    document.documentElement.style.overflow = originalHtmlOverflow;
+    originalHtmlOverflow = null;
+  }
+  if (document.body && originalBodyOverflow !== null) {
+    document.body.style.overflow = originalBodyOverflow;
+    originalBodyOverflow = null;
+  }
+}
+
 function renderOverlay(): void {
   if (!shadowRoot) return;
+  lockPageScroll();
 
   const existing = shadowRoot.querySelector('.pt-overlay-backdrop');
   if (existing) existing.remove();
@@ -810,6 +840,20 @@ function renderOverlay(): void {
   backdrop.addEventListener('click', (e) => {
     if (e.target === backdrop) closeOverlay();
   });
+
+  backdrop.addEventListener('wheel', (e) => {
+    const modal = shadowRoot?.querySelector('.pt-modal');
+    if (!modal?.contains(e.target as Node)) {
+      e.preventDefault();
+    }
+  }, { passive: false });
+
+  backdrop.addEventListener('touchmove', (e) => {
+    const results = shadowRoot?.querySelector('.pt-results');
+    if (!results?.contains(e.target as Node)) {
+      e.preventDefault();
+    }
+  }, { passive: false });
 
   bindModalInteractiveListeners();
 
@@ -1724,6 +1768,7 @@ function openResult(r: SearchResult): void {
 }
 
 export function closeOverlay(): void {
+  unlockPageScroll();
   hideAutocompleteDropdown();
   const host = document.getElementById('pagetrace-overlay-host');
   if (host) host.style.display = 'none';
