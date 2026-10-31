@@ -135,15 +135,20 @@ async function updateContextMenu(trigger?: IndexCreationTrigger, lang?: string):
   }
 }
 
-async function syncBrowserCommandShortcut(hotkey?: string): Promise<void> {
+async function syncBrowserCommandShortcut(hotkey?: string, liveHotkey?: string): Promise<void> {
   try {
     const commandsApi = browser.commands as typeof browser.commands & {
       update?: (detail: { name: string; shortcut: string }) => Promise<void>;
     };
     if (typeof commandsApi?.update !== 'function') return;
-    const targetHotkey = hotkey || (await getSettings()).hotkey;
+    const settings = await getSettings();
+    const targetHotkey = hotkey || settings.hotkey;
+    const targetLiveHotkey = liveHotkey || settings.liveSearchHotkey;
     if (targetHotkey) {
-      await commandsApi.update({ name: 'toggle-overlay', shortcut: targetHotkey });
+      await commandsApi.update({ name: 'toggle-overlay', shortcut: targetHotkey }).catch(() => {});
+    }
+    if (targetLiveHotkey) {
+      await commandsApi.update({ name: 'toggle-live-search', shortcut: targetLiveHotkey }).catch(() => {});
     }
   } catch {
     // Ignore if shortcut format is unsupported by browser.commands.update
@@ -171,8 +176,8 @@ browser.storage.onChanged.addListener((changes, area) => {
     if (newSettings?.indexTrigger || newSettings?.language) {
       updateContextMenu(newSettings.indexTrigger, newSettings.language).catch(console.warn);
     }
-    if (newSettings?.hotkey) {
-      void syncBrowserCommandShortcut(newSettings.hotkey);
+    if (newSettings?.hotkey || newSettings?.liveSearchHotkey) {
+      void syncBrowserCommandShortcut(newSettings.hotkey, newSettings.liveSearchHotkey);
     }
   }
 });
@@ -282,7 +287,7 @@ async function openSearchInTab(): Promise<void> {
   }
 }
 
-async function toggleOverlayOrOpenTab(): Promise<void> {
+async function toggleOverlayOrOpenTab(mode?: 'global' | 'page'): Promise<void> {
   try {
     const tabs = await browser.tabs.query({ active: true, currentWindow: true });
     const activeTab = tabs[0];
@@ -291,33 +296,40 @@ async function toggleOverlayOrOpenTab(): Promise<void> {
       activeTab.url &&
       !activeTab.url.startsWith('about:') &&
       !activeTab.url.startsWith('chrome:') &&
+      !activeTab.url.startsWith('chrome-extension:') &&
       !activeTab.url.startsWith('edge:') &&
-      !activeTab.url.startsWith('moz-extension:')
+      !activeTab.url.startsWith('moz-extension:') &&
+      !activeTab.url.startsWith('view-source:')
     ) {
-      await browser.tabs.sendMessage(activeTab.id, { type: 'TOGGLE_OVERLAY' });
+      await browser.tabs.sendMessage(activeTab.id, { type: 'TOGGLE_OVERLAY', mode });
       return;
     }
   } catch (err) {
-    console.warn('[PageTrace] Could not toggle in-page overlay, falling back to tab:', err);
+    console.warn('[PageTrace] Could not toggle in-page overlay:', err);
   }
-  await openSearchInTab();
+  if (mode !== 'page') {
+    await openSearchInTab();
+  }
 }
 
 browser.commands.onCommand.addListener(async (command) => {
+  const settings = await getSettings();
+  if (!settings.enabled) return;
   if (command === 'toggle-overlay') {
-    const settings = await getSettings();
-    if (!settings.enabled) return;
-    await toggleOverlayOrOpenTab();
+    await toggleOverlayOrOpenTab('global');
+  } else if (command === 'toggle-live-search') {
+    await toggleOverlayOrOpenTab('page');
   }
 });
 
 // Handle messages from content scripts and UI views
 browser.runtime.onMessage.addListener(
   (rawMessage: unknown, sender: Runtime.MessageSender): Promise<unknown> | true | undefined => {
-    const message = rawMessage as ExtensionMessage | { type: string };
+    const message = rawMessage as ExtensionMessage;
 
     if (message.type === 'OPEN_SEARCH_WINDOW' || message.type === 'TOGGLE_OVERLAY') {
-      toggleOverlayOrOpenTab().catch((e) => console.error(e));
+      const mode = message.mode;
+      toggleOverlayOrOpenTab(mode).catch((e) => console.error(e));
       return undefined;
     }
 
@@ -349,20 +361,18 @@ browser.runtime.onMessage.addListener(
     }
 
     if (message.type === 'NAVIGATE_TO_RESULT') {
-      handleNavigateToResult(message as NavigateToResultMessage).catch((e) => {
+      return handleNavigateToResult(message as NavigateToResultMessage).catch((e) => {
         console.error('[PageTrace] Navigate to result error:', e);
       });
-      return true;
     }
 
     if (message.type === 'INDEX_PAGE') {
       if (sender.tab?.incognito) {
         return undefined;
       }
-      handleIndexPage(message as IndexPageMessage).catch((e) => {
+      return handleIndexPage(message as IndexPageMessage).catch((e) => {
         console.error('[PageTrace] Index error:', e);
       });
-      return true;
     }
 
     if (message.type === 'SAVE_CUSTOM_INDEX') {
@@ -403,19 +413,18 @@ browser.runtime.onMessage.addListener(
 
     if (message.type === 'DELETE_CUSTOM_INDEX') {
       const msg = message as DeleteCustomIndexMessage;
-      deleteCustomIndex(msg.id)
+      return deleteCustomIndex(msg.id)
         .then(() => {
           scheduleSearchCachePersist();
         })
         .catch((e) => {
           console.error('[PageTrace] Delete custom index error:', e);
         });
-      return true;
     }
 
     if (message.type === 'DELETE_PAGE') {
       const msg = message as DeletePageMessage;
-      (async () => {
+      return (async () => {
         if (msg.pageId !== undefined) {
           await deletePageById(msg.pageId);
         } else if (msg.url) {
@@ -425,7 +434,6 @@ browser.runtime.onMessage.addListener(
       })().catch((e) => {
         console.error('[PageTrace] Delete page error:', e);
       });
-      return true;
     }
 
     if (message.type === 'GET_SEARCH_SUGGESTIONS') {

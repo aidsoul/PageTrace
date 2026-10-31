@@ -3,7 +3,7 @@ import type { IndexDepth, IndexPageMessage, MediaItem, SiteTagRule, TextChunk, U
 import { getLocale, DEFAULT_LANGUAGE } from '@/i18n/index';
 import { setSafeHtml, matchUrlPattern } from '@/common/tags';
 import { getSettings, matchesHotkey } from '@/common/settings';
-import { initOverlayInShadow, showOverlayInShadow, closeOverlay } from '@/overlay/index';
+import { initOverlayInShadow, showOverlayInShadow, closeOverlay, getCurrentSearchMode, isOverlayOpen, isFloatingNavVisible, restoreModalFromFloatingNav } from '@/overlay/index';
 
 // Content script: DOM parser, indexer, and in-page UI
 
@@ -44,7 +44,8 @@ function normalizeContentUrl(rawUrl: string): string {
 browser.runtime.onMessage.addListener((rawMsg: unknown) => {
   const msg = rawMsg as { type: string };
   if (msg.type === 'TOGGLE_OVERLAY') {
-    toggleOverlay();
+    const { mode } = rawMsg as { type: string; mode?: 'global' | 'page' };
+    toggleOverlay(mode);
   }
   if (msg.type === 'SCROLL_TO') {
     const { text, selector } = rawMsg as { type: string; text: string; selector: string };
@@ -88,12 +89,14 @@ window.addEventListener('pt:navigate', (e: Event) => {
 
 // Custom hotkey listener
 let cachedHotkey = 'Alt+Shift+F';
+let cachedLiveHotkey = 'Alt+Shift+L';
 let cachedEnabled = true;
 
 async function syncHotkeySetting(): Promise<void> {
   try {
     const s = await getSettings();
     if (s.hotkey) cachedHotkey = s.hotkey;
+    if (s.liveSearchHotkey) cachedLiveHotkey = s.liveSearchHotkey;
     if (typeof s.enabled === 'boolean') cachedEnabled = s.enabled;
   } catch {}
 }
@@ -103,6 +106,7 @@ browser.storage.onChanged.addListener((changes, area) => {
   if (area === 'sync' && changes['settings']) {
     const s = changes['settings'].newValue as Partial<UserSettings> | undefined;
     if (s?.hotkey) cachedHotkey = s.hotkey;
+    if (s?.liveSearchHotkey) cachedLiveHotkey = s.liveSearchHotkey;
     if (typeof s?.enabled === 'boolean') cachedEnabled = s.enabled;
   }
 });
@@ -114,21 +118,37 @@ function isEditableEventTarget(target: EventTarget | null): boolean {
     tag === 'input' ||
     tag === 'textarea' ||
     tag === 'select' ||
-    target.isContentEditable
+    target.isContentEditable ||
+    Boolean(target.closest('[contenteditable="true"]'))
   );
 }
 
 window.addEventListener(
   'keydown',
   (e: KeyboardEvent) => {
-    if (!cachedEnabled || !cachedHotkey) return;
+    if (!cachedEnabled) return;
+    const host = document.getElementById('pagetrace-overlay-host');
+    const isInsideOverlay = Boolean(host && e.composedPath().includes(host));
+    if (e.key === 'Escape' && isOverlayOpen() && !isInsideOverlay) {
+      e.preventDefault();
+      e.stopPropagation();
+      closeOverlay();
+      return;
+    }
     if (!e.altKey && !e.ctrlKey && !e.metaKey && isEditableEventTarget(e.target)) {
       return;
     }
-    if (matchesHotkey(e, cachedHotkey)) {
+    if (cachedLiveHotkey && matchesHotkey(e, cachedLiveHotkey)) {
       e.preventDefault();
       e.stopPropagation();
-      toggleOverlay();
+      toggleOverlay('page');
+      return;
+    }
+    if (cachedHotkey && matchesHotkey(e, cachedHotkey)) {
+      e.preventDefault();
+      e.stopPropagation();
+      toggleOverlay('global');
+      return;
     }
   },
   true,
@@ -603,6 +623,10 @@ function ensureHighlightStyles(): void {
       background-color: #FDE047;
       color: #0F172A;
     }
+    ::highlight(pagetrace-match-active) {
+      background-color: #FB923C;
+      color: #0F172A;
+    }
     @keyframes pt-target-pulse {
       0% {
         box-shadow: 0 0 0 0 rgba(253, 224, 71, 0.85), 0 0 0 4px rgba(253, 224, 71, 0.35);
@@ -620,6 +644,18 @@ function ensureHighlightStyles(): void {
     .pt-scroll-target-flash {
       border-radius: 4px;
       animation: pt-target-pulse 3.2s cubic-bezier(0.16, 1, 0.3, 1) forwards !important;
+    }
+    .pt-fallback-match {
+      outline: 2px solid #FDE047 !important;
+      outline-offset: 1px !important;
+      background-color: rgba(253, 224, 71, 0.2) !important;
+      border-radius: 2px;
+    }
+    .pt-fallback-match-active {
+      outline: 2px solid #FB923C !important;
+      outline-offset: 2px !important;
+      background-color: rgba(251, 146, 60, 0.35) !important;
+      border-radius: 2px;
     }
   `;
   (document.head || document.documentElement).appendChild(style);
@@ -834,40 +870,51 @@ function showToast(message: string): void {
 let overlayLoaded = false;
 let lastToggleTime = 0;
 
-function toggleOverlay(): void {
+function toggleOverlay(targetMode?: 'global' | 'page'): void {
   const now = Date.now();
   if (now - lastToggleTime < 300) {
     return;
   }
   lastToggleTime = now;
 
-  if (!overlayLoaded) {
-    injectOverlay();
+  const host = document.getElementById('pagetrace-overlay-host');
+  if (!overlayLoaded || !host) {
+    injectOverlay(targetMode);
     return;
   }
-  const host = document.getElementById('pagetrace-overlay-host');
-  if (host) {
-    const isHiddenNow = host.style.display === 'none';
-    if (isHiddenNow) {
-      host.style.display = 'block';
-      void showOverlayInShadow();
+
+  const isHiddenNow = host.style.display === 'none';
+  if (isHiddenNow) {
+    host.style.display = 'block';
+    void showOverlayInShadow(targetMode);
+  } else if (isFloatingNavVisible() && (!targetMode || targetMode === 'page')) {
+    restoreModalFromFloatingNav();
+  } else {
+    const currentMode = getCurrentSearchMode();
+    if (targetMode && targetMode !== currentMode) {
+      void showOverlayInShadow(targetMode);
     } else {
       closeOverlay();
     }
   }
 }
 
-function injectOverlay(): void {
+function injectOverlay(targetMode?: 'global' | 'page'): void {
   overlayLoaded = true;
+
+  const existingHost = document.getElementById('pagetrace-overlay-host');
+  if (existingHost) {
+    existingHost.remove();
+  }
 
   const host = document.createElement('div');
   host.id = 'pagetrace-overlay-host';
-  host.style.cssText = 'all: initial; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 2147483647; pointer-events: none;';
+  host.style.cssText = 'all: initial; display: block; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 2147483647; pointer-events: none;';
   document.documentElement.appendChild(host);
 
   const shadow = host.attachShadow({ mode: 'open' });
   ensureHighlightStyles();
-  void initOverlayInShadow(shadow);
+  void initOverlayInShadow(shadow, targetMode);
 }
 
 // DOM utility helpers

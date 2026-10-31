@@ -753,7 +753,8 @@ function createResultCard(group: GroupedSearchResult, idx: number): HTMLElement 
     } else {
       expandedUrls.add(norm);
     }
-    renderResults();
+    const newCard = createResultCard(group, idx);
+    card.replaceWith(newCard);
   });
 
   card.querySelectorAll<HTMLElement>('.result-submatch-item').forEach((subEl) => {

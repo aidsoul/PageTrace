@@ -28,7 +28,6 @@ const targets = targetArg === 'chrome'
 const ENTRIES = [
   { name: 'background', input: 'src/background/index.ts', format: 'es' },
   { name: 'content',    input: 'src/content/index.ts',    format: 'iife' },
-  { name: 'overlay',   input: 'src/overlay/index.ts',    format: 'iife' },
   { name: 'options',   input: 'src/options/index.ts',    format: 'iife' },
   { name: 'popup',     input: 'src/popup/index.ts',      format: 'iife' },
   { name: 'search',    input: 'src/search-window/index.ts', format: 'iife' },

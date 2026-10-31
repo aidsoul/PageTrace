@@ -17,7 +17,7 @@ PageTrace injects interactive UI directly into arbitrary third-party web pages v
    - All CSS inside the Shadow DOM must be self-contained (`:host { all: initial; ... }`) with explicit `font-family`, `box-sizing: border-box`, and CSS custom properties so host-page styles (`div`, `input`, `button`, `mark`) never bleed into PageTrace UI.
 2. **Keyboard & Focus Trapping**:
    - When the overlay or selection popover is open and focused, call `e.stopPropagation()` on `keydown`, `keyup`, and `keypress` events inside the Shadow DOM so host-page single-key shortcuts (e.g., GitHub `s` or `/`, YouTube `k` or `f`) are not accidentally triggered while typing.
-   - Maintain full keyboard navigation: `Alt+Shift+F` (or custom hotkey configured via [src/common/settings.ts](file:///d:/Projects/PageTrace/src/common/settings.ts)) to toggle, `↑`/`↓` to navigate results or autocomplete suggestions, `Enter` to open/scroll, `Esc` to close.
+   - Maintain full keyboard navigation: `Alt+Shift+F` (or custom hotkey configured via [src/common/settings.ts](file:///d:/Projects/PageTrace/src/common/settings.ts)) for global search overlay, `Alt+Shift+L` for live in-page search with floating toolbar, `↑`/`↓` to navigate results or autocomplete suggestions, `Enter` / `Shift+Enter` to cycle page matches, `Esc` to close.
 3. **Safe HTML Rendering**:
    - Never assign untrusted or dynamic strings to `.innerHTML`. Always escape dynamic values with `escapeHtml()` / `escapeAttr()` and mount fragments using `setSafeHtml(container, html)` from [src/common/tags.ts](file:///d:/Projects/PageTrace/src/common/tags.ts).
 

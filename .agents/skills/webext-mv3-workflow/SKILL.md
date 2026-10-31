@@ -14,8 +14,7 @@ PageTrace targets both **Firefox MV3** and **Chrome MV3** from a shared TypeScri
 
 Defined in [build.mjs](file:///d:/Projects/PageTrace/build.mjs):
 - `background` (`src/background/index.ts`) — bundled as ES module (`format: 'es'`)
-- `content` (`src/content/index.ts`) — bundled as IIFE (`PT_content`)
-- `overlay` (`src/overlay/index.ts`) — bundled as IIFE (`PT_overlay`)
+- `content` (`src/content/index.ts`) — bundled as IIFE (`PT_content`), with in-page search overlay (`src/overlay/index.ts`) inlined directly
 - `options` (`src/options/index.ts`) — bundled as IIFE (`PT_options`)
 - `popup` (`src/popup/index.ts`) — bundled as IIFE (`PT_popup`)
 - `search` (`src/search-window/index.ts`) — bundled as IIFE (`PT_search`)

@@ -6,6 +6,9 @@ export type IndexDepth = 'headings' | 'semantic' | 'full';
 /** Supported media file extensions for whitelist */
 export type MediaExtension = 'png' | 'jpg' | 'jpeg' | 'webp' | 'gif' | 'svg' | 'pdf' | 'doc' | 'docx' | 'xls' | 'xlsx' | 'csv';
 
+/** In-page search mode: all visited pages or current tab */
+export type SearchMode = 'global' | 'page';
+
 /** A single indexed web page */
 export interface PageRecord {
   id?: number;
@@ -117,6 +120,8 @@ export interface UserSettings {
   maxSizeMb: number;
   /** Custom hotkey override (e.g. "Alt+Shift+F") */
   hotkey: string;
+  /** Custom hotkey for in-page live search (e.g. "Alt+Shift+L") */
+  liveSearchHotkey: string;
   /** Whether extension is globally enabled */
   enabled: boolean;
   /** Maximum number of results returned by search engine */
@@ -152,6 +157,7 @@ export const DEFAULT_SETTINGS: UserSettings = {
   ttlDays: 30,
   maxSizeMb: 150,
   hotkey: 'Alt+Shift+F',
+  liveSearchHotkey: 'Alt+Shift+L',
   enabled: true,
   searchMaxResults: 100,
   searchPageSize: 20,
@@ -189,6 +195,18 @@ export interface IndexPageMessage {
 /** Message from background/popup to content script to trigger overlay */
 export interface ToggleOverlayMessage {
   type: 'TOGGLE_OVERLAY';
+  mode?: SearchMode;
+}
+
+/** Message from popup/options to background to open search window or overlay */
+export interface OpenSearchWindowMessage {
+  type: 'OPEN_SEARCH_WINDOW';
+  mode?: SearchMode;
+}
+
+/** Message to directly open search in a new browser tab */
+export interface OpenSearchTabMessage {
+  type: 'OPEN_SEARCH_TAB';
 }
 
 /** Message from content script asking background to scroll to text */
@@ -272,6 +290,8 @@ export interface GetSearchSuggestionsMessage {
 export type ExtensionMessage =
   | IndexPageMessage
   | ToggleOverlayMessage
+  | OpenSearchWindowMessage
+  | OpenSearchTabMessage
   | ScrollToMessage
   | NavigateToResultMessage
   | SaveCustomIndexMessage

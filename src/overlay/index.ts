@@ -1,5 +1,5 @@
 import browser from 'webextension-polyfill';
-import type { SearchResult, SearchTypeFilter, SearchSortOption, SearchFilterOptions, TagCatalogItem, UserSettings } from '@/types/index';
+import type { SearchResult, SearchTypeFilter, SearchSortOption, SearchFilterOptions, TagCatalogItem, UserSettings, SearchMode } from '@/types/index';
 import { getSettings, saveSettings } from '@/common/settings';
 import { getLocale, DEFAULT_LANGUAGE } from '@/i18n/index';
 import { renderTagBadge, formatTimeAgo, normalizeTagName, setSafeHtml, escapeHtml, escapeAttr, matchUrlPattern } from '@/common/tags';
@@ -21,6 +21,28 @@ import {
 let currentLang = DEFAULT_LANGUAGE;
 let tagCatalog: TagCatalogItem[] = [];
 let pinnedDomains: string[] = [];
+let currentSearchMode: SearchMode = 'global';
+let liveMatches: LiveDomMatch[] = [];
+let currentLiveIndex = -1;
+let focusedLiveIndex = 0;
+let isPageResultsExpanded = false;
+let isFloatingNavOpen = false;
+
+
+interface LiveDomMatch {
+  index: number;
+  element: HTMLElement;
+  textNode: Text;
+  startOffset: number;
+  endOffset: number;
+  endTextNode?: Text;
+  surroundingText: string;
+  snippetHtml: string;
+  tagName: string;
+}
+
+const GLOBAL_ICON_SVG = '<svg class="pt-mode-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg>';
+const PAGE_ICON_SVG = '<svg class="pt-mode-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>';
 
 // In-page search overlay mounted in Shadow DOM
 
@@ -52,6 +74,17 @@ const OVERLAY_CSS = `
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Inter', sans-serif;
   }
 
+  .pt-overlay-backdrop.page-mode {
+    background: transparent !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    pointer-events: none !important;
+    padding-top: 18px !important;
+    padding-right: 24px !important;
+    justify-content: flex-end !important;
+    align-items: flex-start !important;
+  }
+
   .pt-modal {
     background: #181A1F;
     border: 1px solid #2A2D35;
@@ -64,6 +97,127 @@ const OVERLAY_CSS = `
     overflow: hidden;
     pointer-events: all;
     position: relative;
+    transition: width 0.15s ease, max-height 0.15s ease, box-shadow 0.15s ease;
+  }
+
+  .pt-modal.page-mode {
+    width: min(450px, 92vw);
+    max-height: 60vh;
+    border-radius: 12px;
+    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.65), 0 0 0 1px #2E3340;
+    pointer-events: all !important;
+    background: #181A1F;
+  }
+
+  .pt-modal.page-mode.collapsed {
+    max-height: 48px !important;
+  }
+
+  .pt-modal.page-mode.collapsed .pt-results,
+  .pt-modal.page-mode.collapsed .pt-footer,
+  .pt-modal.page-mode.collapsed .pt-autocomplete-wrap {
+    display: none !important;
+  }
+
+  .pt-modal.page-mode.collapsed .pt-search-bar {
+    border-bottom: none !important;
+  }
+
+  .pt-modal.page-mode .pt-search-bar {
+    padding: 8px 12px;
+    gap: 8px;
+  }
+
+  .pt-modal.page-mode .pt-search-input {
+    font-size: 14px;
+  }
+
+  .pt-modal.page-mode .pt-search-icon {
+    display: none;
+  }
+
+  .pt-modal.page-mode .pt-kbd {
+    display: none;
+  }
+
+  .pt-inbar-nav {
+    display: none;
+    align-items: center;
+    gap: 3px;
+    flex-shrink: 0;
+  }
+
+  .pt-modal.page-mode .pt-inbar-nav.visible {
+    display: flex;
+  }
+
+  .pt-inbar-counter {
+    font-size: 11.5px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    color: #F4FF2B;
+    padding: 2px 6px;
+    background: #20232B;
+    border-radius: 4px;
+    white-space: nowrap;
+    min-width: 40px;
+    text-align: center;
+    line-height: 1.4;
+  }
+
+  .pt-inbar-btn {
+    background: transparent;
+    border: none;
+    color: #8E94A2;
+    width: 24px;
+    height: 24px;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: all 0.12s ease;
+    padding: 0;
+    flex-shrink: 0;
+  }
+
+  .pt-inbar-btn:hover {
+    background: #272B36;
+    color: #ECEEF2;
+  }
+
+  .pt-inbar-btn svg {
+    width: 14px;
+    height: 14px;
+  }
+
+  .pt-close-btn {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: none;
+    color: #8E94A2;
+    width: 24px;
+    height: 24px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.12s ease;
+    padding: 0;
+    flex-shrink: 0;
+  }
+
+  .pt-modal.page-mode .pt-close-btn {
+    display: flex;
+  }
+
+  .pt-close-btn:hover {
+    background: rgba(239, 68, 68, 0.2);
+    color: #F87171;
+  }
+
+  .pt-close-btn svg {
+    width: 14px;
+    height: 14px;
   }
 
   .pt-search-bar {
@@ -198,6 +352,179 @@ const OVERLAY_CSS = `
     font-size: 11px;
     color: #7E838F;
   }
+
+  .pt-mode-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    background: #20232B;
+    border: 1px solid #2E3340;
+    border-radius: 8px;
+    color: #9499A6;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    user-select: none;
+    flex-shrink: 0;
+  }
+
+  .pt-mode-toggle:hover {
+    background: #272B36;
+    border-color: #3C4252;
+    color: #ECEEF2;
+  }
+
+  .pt-mode-toggle.is-page {
+    background: rgba(244, 255, 43, 0.12);
+    border-color: rgba(244, 255, 43, 0.5);
+    color: #F4FF2B;
+  }
+
+  .pt-mode-icon {
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
+  }
+
+  .pt-tabs.page-mode-hidden {
+    display: none;
+  }
+
+  .pt-live-item {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 12px 18px;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background 0.12s ease;
+    border-left: 2px solid transparent;
+  }
+
+  .pt-live-item:hover,
+  .pt-live-item.focused {
+    background: #1F222A;
+    border-left-color: #F4FF2B;
+  }
+
+  .pt-live-item-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 11px;
+    color: #7E838F;
+  }
+
+  .pt-live-tag {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    background: #252832;
+    color: #A0A6B5;
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-size: 11px;
+  }
+
+  .pt-live-pos {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    color: #7E838F;
+  }
+
+  .pt-live-snippet {
+    font-size: 13px;
+    line-height: 1.5;
+    color: #C7CBD4;
+  }
+
+  .pt-live-snippet mark,
+  .pt-highlight {
+    background: #F4FF2B;
+    color: #111215 !important;
+    border-radius: 2px;
+    padding: 0 2px;
+    font-weight: 600;
+  }
+
+  .pt-floating-nav {
+    position: fixed;
+    top: 20px;
+    right: 24px;
+    background: #181A1F;
+    border: 1px solid #2E3340;
+    border-radius: 10px;
+    box-shadow: 0 12px 36px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(255, 255, 255, 0.05);
+    padding: 6px 10px;
+    display: none;
+    align-items: center;
+    gap: 8px;
+    z-index: 2147483647;
+    pointer-events: all;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Inter', sans-serif;
+    color: #ECEEF2;
+    animation: pt-dock-in 0.15s ease-out;
+  }
+
+  .pt-floating-nav.visible {
+    display: flex;
+  }
+
+  @keyframes pt-dock-in {
+    from { opacity: 0; transform: translateY(-6px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .pt-float-query {
+    font-size: 12px;
+    font-weight: 500;
+    color: #ECEEF2;
+    max-width: 140px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    background: #22252E;
+    padding: 3px 8px;
+    border-radius: 4px;
+  }
+
+  .pt-float-counter {
+    font-size: 12px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    color: #F4FF2B;
+    white-space: nowrap;
+    min-width: 44px;
+    text-align: center;
+  }
+
+  .pt-float-divider {
+    width: 1px;
+    height: 16px;
+    background: #2E3340;
+  }
+
+  .pt-float-btn {
+    background: transparent;
+    border: none;
+    border-radius: 5px;
+    color: #8E94A2;
+    width: 26px;
+    height: 26px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: all 0.12s ease;
+  }
+
+  .pt-float-btn:hover {
+    background: #272B36;
+    color: #ECEEF2;
+  }
+
+  .pt-float-close:hover {
+    background: rgba(239, 68, 68, 0.2);
+    color: #F87171;
+  }
+
 
   .pt-tabs {
     display: flex;
@@ -740,7 +1067,563 @@ async function refreshSuggestionsData(): Promise<void> {
   } catch {}
 }
 
-export async function initOverlayInShadow(shadow: ShadowRoot): Promise<void> {
+
+function isElementHidden(el: Element): boolean {
+  if ((el as HTMLElement).hidden === true) {
+    return true;
+  }
+  if ('checkVisibility' in el && typeof (el as HTMLElement).checkVisibility === 'function') {
+    return !(el as HTMLElement).checkVisibility({
+      checkOpacity: true,
+      checkVisibilityCSS: true,
+    });
+  }
+  const style = window.getComputedStyle(el);
+  return style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0';
+}
+
+const BLOCK_TAGS = new Set([
+  'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li', 'ul', 'ol', 'blockquote',
+  'article', 'section', 'header', 'footer', 'aside', 'main', 'div', 'td',
+  'th', 'tr', 'table', 'dd', 'dt', 'dl', 'pre', 'summary', 'details',
+  'figure', 'figcaption', 'form', 'nav'
+]);
+
+function getBlockAncestor(node: Node): HTMLElement | null {
+  let el = node.parentElement;
+  while (el && el !== document.body) {
+    if (BLOCK_TAGS.has(el.tagName.toLowerCase())) {
+      return el;
+    }
+    el = el.parentElement;
+  }
+  return el || document.body;
+}
+
+function findLivePageMatches(query: string, maxMatches = 250): LiveDomMatch[] {
+  const trimmed = query.trim().toLowerCase();
+  if (!trimmed || !document.body) return [];
+
+  const matches: LiveDomMatch[] = [];
+  const overlayHost = document.getElementById('pagetrace-overlay-host');
+  const selectionHost = document.getElementById('pagetrace-selection-host');
+
+  const walker = document.createTreeWalker(
+    document.body,
+    NodeFilter.SHOW_TEXT,
+    {
+      acceptNode(node: Node) {
+        const parent = node.parentElement;
+        if (!parent) return NodeFilter.FILTER_REJECT;
+        if (overlayHost && (overlayHost === parent || overlayHost.contains(parent))) {
+          return NodeFilter.FILTER_REJECT;
+        }
+        if (selectionHost && (selectionHost === parent || selectionHost.contains(parent))) {
+          return NodeFilter.FILTER_REJECT;
+        }
+        if (parent.closest?.('.pagetrace-toast')) {
+          return NodeFilter.FILTER_REJECT;
+        }
+        const tag = parent.tagName.toLowerCase();
+        if (
+          tag === 'script' ||
+          tag === 'style' ||
+          tag === 'noscript' ||
+          tag === 'template' ||
+          tag === 'textarea' ||
+          tag === 'input' ||
+          tag === 'select' ||
+          tag === 'option' ||
+          tag === 'svg' ||
+          Boolean(parent.closest('svg'))
+        ) {
+          return NodeFilter.FILTER_REJECT;
+        }
+        return NodeFilter.FILTER_ACCEPT;
+      },
+    }
+  );
+
+  let currentBlock: HTMLElement | null = null;
+  let blockEntries: { node: Text; parentEl: HTMLElement; start: number; end: number }[] = [];
+  let blockCombinedText = '';
+
+  const processBlockMatches = (): void => {
+    if (blockEntries.length === 0 || !blockCombinedText) return;
+    const lower = blockCombinedText.toLowerCase();
+    if (!lower.includes(trimmed)) return;
+
+    let pos = 0;
+    while ((pos = lower.indexOf(trimmed, pos)) !== -1 && matches.length < maxMatches) {
+      const matchStart = pos;
+      const matchEnd = pos + trimmed.length;
+
+      const startEntry =
+        blockEntries.find((e) => matchStart >= e.start && matchStart < e.end) || blockEntries[0]!;
+      const endEntry =
+        blockEntries.find((e) => matchEnd > e.start && matchEnd <= e.end) ||
+        blockEntries[blockEntries.length - 1]!;
+
+      const startOffset = Math.max(0, matchStart - startEntry.start);
+      const endOffset = Math.min(endEntry.node.length, matchEnd - endEntry.start);
+
+      const snippetStart = Math.max(0, matchStart - 40);
+      const snippetEnd = Math.min(blockCombinedText.length, matchEnd + 60);
+      const before = escapeHtml(blockCombinedText.slice(snippetStart, matchStart));
+      const matched = escapeHtml(blockCombinedText.slice(matchStart, matchEnd));
+      const after = escapeHtml(blockCombinedText.slice(matchEnd, snippetEnd));
+      const snippetHtml = `${snippetStart > 0 ? '…' : ''}${before}<mark class="pt-highlight">${matched}</mark>${after}${snippetEnd < blockCombinedText.length ? '…' : ''}`;
+
+      matches.push({
+        index: matches.length,
+        element: startEntry.parentEl,
+        textNode: startEntry.node,
+        startOffset,
+        endOffset,
+        endTextNode: endEntry.node !== startEntry.node ? endEntry.node : undefined,
+        surroundingText: blockCombinedText.slice(snippetStart, snippetEnd),
+        snippetHtml,
+        tagName: startEntry.parentEl.tagName.toLowerCase(),
+      });
+
+      pos += Math.max(1, trimmed.length);
+    }
+  };
+
+  let current: Node | null;
+  while ((current = walker.nextNode()) && matches.length < maxMatches) {
+    const textNode = current as Text;
+    const text = textNode.textContent ?? '';
+    if (!text) continue;
+
+    const parentEl = textNode.parentElement as HTMLElement | null;
+    if (!parentEl || isElementHidden(parentEl)) continue;
+
+    const blockEl = getBlockAncestor(textNode);
+    if (blockEl !== currentBlock) {
+      processBlockMatches();
+      currentBlock = blockEl;
+      blockEntries = [];
+      blockCombinedText = '';
+    }
+
+    const start = blockCombinedText.length;
+    blockCombinedText += text;
+    blockEntries.push({
+      node: textNode,
+      parentEl,
+      start,
+      end: start + text.length,
+    });
+  }
+
+  if (matches.length < maxMatches) {
+    processBlockMatches();
+  }
+
+  return matches;
+}
+
+function renderLiveResults(): void {
+  if (!shadowRoot) return;
+  const container = shadowRoot.querySelector<HTMLElement>('.pt-results');
+  if (!container) return;
+
+  const html = liveMatches
+    .map(
+      (m, i) => `
+      <div class="pt-live-item ${i === focusedLiveIndex ? 'focused' : ''}" data-live-index="${i}">
+        <div class="pt-live-item-header">
+          <span class="pt-live-tag">&lt;${escapeHtml(m.tagName)}&gt;</span>
+          <span class="pt-live-pos">#${i + 1}</span>
+        </div>
+        <div class="pt-live-snippet">${m.snippetHtml}</div>
+      </div>
+    `,
+    )
+    .join('');
+
+  setSafeHtml(container, html);
+
+  container.querySelectorAll<HTMLElement>('.pt-live-item').forEach((el) => {
+    el.addEventListener('click', () => {
+      const idx = Number(el.dataset['liveIndex']);
+      if (!Number.isNaN(idx)) {
+        activateLiveMatchAndDock(idx);
+      }
+    });
+  });
+}
+
+function renderLiveEmpty(text: string): void {
+  if (!shadowRoot) return;
+  const container = shadowRoot.querySelector<HTMLElement>('.pt-results');
+  if (!container) return;
+  setSafeHtml(
+    container,
+    `
+    <div class="pt-empty">
+      <span class="pt-empty-icon">🔍</span>
+      <span>${escapeHtml(text)}</span>
+    </div>
+  `,
+  );
+}
+
+function activateLiveMatchAndDock(index: number): void {
+  if (liveMatches.length === 0) return;
+  const backdrop = shadowRoot?.querySelector<HTMLElement>('.pt-overlay-backdrop');
+  if (backdrop) backdrop.style.display = 'none';
+  unlockPageScroll();
+
+  showFloatingNav();
+  activateLiveMatch(index);
+}
+
+function showFloatingNav(): void {
+  if (!shadowRoot) return;
+  let nav = shadowRoot.querySelector<HTMLElement>('.pt-floating-nav');
+  const t = getLocale(currentLang);
+  const input = shadowRoot.querySelector<HTMLInputElement>('.pt-search-input');
+  const query = input?.value || '';
+
+  if (!nav) {
+    nav = document.createElement('div');
+    nav.className = 'pt-floating-nav visible';
+    nav.setAttribute('role', 'toolbar');
+    nav.setAttribute('aria-label', 'Page search navigation');
+    setSafeHtml(
+      nav,
+      `
+      <span class="pt-float-query" id="pt-float-query" title="${escapeAttr(query)}">${escapeHtml(query)}</span>
+      <span class="pt-float-counter"><span id="pt-float-curr">1</span> / <span id="pt-float-total">${liveMatches.length}</span></span>
+      <div class="pt-float-divider"></div>
+      <button class="pt-float-btn pt-float-prev" type="button" title="${escapeAttr(t.overlay.liveNavPrev)}">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m18 15-6-6-6 6"/></svg>
+      </button>
+      <button class="pt-float-btn pt-float-next" type="button" title="${escapeAttr(t.overlay.liveNavNext)}">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>
+      </button>
+      <div class="pt-float-divider"></div>
+      <button class="pt-float-btn pt-float-expand" type="button" title="${escapeAttr(t.overlay.liveNavExpand)}">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="M21 3l-7 7"/><path d="M3 21l7-7"/></svg>
+      </button>
+      <button class="pt-float-btn pt-float-close" type="button" title="${escapeAttr(t.overlay.liveNavClose)}">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+      </button>
+    `,
+    );
+    shadowRoot.appendChild(nav);
+
+    nav.querySelector('.pt-float-prev')?.addEventListener('click', () => {
+      activateLiveMatch(currentLiveIndex - 1);
+    });
+    nav.querySelector('.pt-float-next')?.addEventListener('click', () => {
+      activateLiveMatch(currentLiveIndex + 1);
+    });
+    nav.querySelector('.pt-float-expand')?.addEventListener('click', () => {
+      restoreModalFromFloatingNav();
+    });
+    nav.querySelector('.pt-float-close')?.addEventListener('click', () => {
+      closeOverlay();
+    });
+  } else {
+    nav.classList.add('visible');
+    const qEl = nav.querySelector<HTMLElement>('#pt-float-query');
+    if (qEl) {
+      qEl.textContent = query;
+      qEl.title = query;
+    }
+    const totEl = nav.querySelector<HTMLElement>('#pt-float-total');
+    if (totEl) totEl.textContent = String(liveMatches.length);
+  }
+
+  if (!isFloatingNavOpen) {
+    isFloatingNavOpen = true;
+    window.addEventListener('keydown', onFloatingNavGlobalKeydown, true);
+  }
+}
+
+export function restoreModalFromFloatingNav(): void {
+  if (searchDebounce) {
+    clearTimeout(searchDebounce);
+    searchDebounce = null;
+  }
+  hideFloatingNav(false);
+  const backdrop = shadowRoot?.querySelector<HTMLElement>('.pt-overlay-backdrop');
+  if (backdrop) backdrop.style.display = 'flex';
+  if (currentSearchMode === 'page') {
+    unlockPageScroll();
+  } else {
+    lockPageScroll();
+  }
+  const input = shadowRoot?.querySelector<HTMLInputElement>('.pt-search-input');
+  input?.focus();
+  input?.select();
+  if (currentSearchMode === 'page' && liveMatches.length > 0) {
+    activateLiveMatch(currentLiveIndex, 'none');
+  }
+}
+
+export function isFloatingNavVisible(): boolean {
+  return isFloatingNavOpen;
+}
+
+function hideFloatingNav(clearHighlights = true): void {
+  if (isFloatingNavOpen) {
+    isFloatingNavOpen = false;
+    window.removeEventListener('keydown', onFloatingNavGlobalKeydown, true);
+  }
+  const nav = shadowRoot?.querySelector<HTMLElement>('.pt-floating-nav');
+  if (nav) nav.classList.remove('visible');
+  if (clearHighlights) {
+    clearLiveHighlights();
+  }
+}
+
+function onFloatingNavGlobalKeydown(e: KeyboardEvent): void {
+  if (!isFloatingNavOpen) return;
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    e.stopPropagation();
+    closeOverlay();
+    return;
+  }
+  const targetEl = e.target instanceof Element ? e.target : null;
+  const tag = targetEl ? targetEl.tagName.toLowerCase() : '';
+  const isInteractiveTarget =
+    targetEl !== null &&
+    (tag === 'input' ||
+      tag === 'textarea' ||
+      tag === 'select' ||
+      tag === 'button' ||
+      tag === 'a' ||
+      tag === 'summary' ||
+      tag === 'canvas' ||
+      (targetEl as HTMLElement).isContentEditable ||
+      Boolean(
+        targetEl.closest(
+          'a, button, summary, select, textarea, input, canvas, [role="button"], [role="link"], [role="menuitem"], [role="tab"], [role="textbox"], [role="grid"], [role="gridcell"], [contenteditable="true"]'
+        )
+      ));
+  if (isInteractiveTarget && e.key === 'Enter') {
+    return;
+  }
+  if (e.key === 'Enter' || e.key === 'F3') {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.shiftKey) {
+      activateLiveMatch(currentLiveIndex - 1);
+    } else {
+      activateLiveMatch(currentLiveIndex + 1);
+    }
+    return;
+  }
+}
+
+function updateAllLiveHighlights(): void {
+  if (!('Highlight' in window) || !('highlights' in CSS)) {
+    document.querySelectorAll('.pt-fallback-match').forEach((el) => {
+      el.classList.remove('pt-fallback-match', 'pt-fallback-match-active');
+    });
+    liveMatches.forEach((m, idx) => {
+      if (m.element && m.element.isConnected) {
+        m.element.classList.add('pt-fallback-match');
+        if (idx === currentLiveIndex) {
+          m.element.classList.add('pt-fallback-match-active');
+        }
+      }
+    });
+    return;
+  }
+
+  const highlightsMap = (CSS as unknown as { highlights: Map<string, unknown> }).highlights;
+  try {
+    const allRanges: Range[] = [];
+    let activeRange: Range | null = null;
+
+    liveMatches.forEach((m, idx) => {
+      if (m.textNode && m.textNode.isConnected) {
+        try {
+          const range = document.createRange();
+          range.setStart(m.textNode, m.startOffset);
+          const endNode = m.endTextNode && m.endTextNode.isConnected ? m.endTextNode : m.textNode;
+          range.setEnd(endNode, m.endOffset);
+          allRanges.push(range);
+          if (idx === currentLiveIndex) {
+            activeRange = range;
+          }
+        } catch {}
+      }
+    });
+
+    const HighlightConstructor = (window as unknown as { Highlight: new (...r: Range[]) => unknown }).Highlight;
+    if (allRanges.length > 0) {
+      highlightsMap.set('pagetrace-match', new HighlightConstructor(...allRanges));
+    } else {
+      highlightsMap.delete('pagetrace-match');
+    }
+
+    if (activeRange) {
+      highlightsMap.set('pagetrace-match-active', new HighlightConstructor(activeRange));
+    } else {
+      highlightsMap.delete('pagetrace-match-active');
+    }
+  } catch {}
+}
+
+function clearLiveHighlights(): void {
+  if ('highlights' in CSS && CSS.highlights) {
+    const h = (CSS as unknown as { highlights: Map<string, unknown> }).highlights;
+    h.delete('pagetrace-match');
+    h.delete('pagetrace-match-active');
+  }
+  document.querySelectorAll('.pt-scroll-target-flash').forEach((el) => {
+    el.classList.remove('pt-scroll-target-flash');
+  });
+  document.querySelectorAll('.pt-fallback-match').forEach((el) => {
+    el.classList.remove('pt-fallback-match', 'pt-fallback-match-active');
+  });
+}
+
+function activateLiveMatch(index: number, scrollBehavior: ScrollBehavior | 'none' = 'smooth'): void {
+  if (liveMatches.length === 0) return;
+  currentLiveIndex = (index + liveMatches.length) % liveMatches.length;
+  focusedLiveIndex = currentLiveIndex;
+  updateFocus();
+
+  const inbarCurr = shadowRoot?.querySelector<HTMLElement>('#pt-inbar-curr');
+  if (inbarCurr) inbarCurr.textContent = String(currentLiveIndex + 1);
+
+  const currEl = shadowRoot?.querySelector<HTMLElement>('#pt-float-curr');
+  if (currEl) currEl.textContent = String(currentLiveIndex + 1);
+
+  const m = liveMatches[currentLiveIndex];
+  if (!m || !m.element) return;
+
+  if (m.element.isConnected && scrollBehavior !== 'none') {
+    m.element.scrollIntoView({ behavior: scrollBehavior, block: 'center' });
+  }
+
+  document.querySelectorAll('.pt-scroll-target-flash').forEach((el) => {
+    el.classList.remove('pt-scroll-target-flash');
+  });
+  if (m.element.isConnected) {
+    void m.element.offsetWidth;
+    m.element.classList.add('pt-scroll-target-flash');
+  }
+
+  updateAllLiveHighlights();
+}
+
+function setSearchMode(mode: SearchMode): void {
+  if (currentSearchMode === 'page' && mode !== 'page') {
+    clearLiveHighlights();
+  }
+  currentSearchMode = mode;
+  syncModeUI();
+  const input = shadowRoot?.querySelector<HTMLInputElement>('.pt-search-input');
+  if (input) {
+    void performSearch(input.value);
+    input.focus();
+  }
+}
+
+function updateInbarNavVisuals(): void {
+  if (!shadowRoot) return;
+  const t = getLocale(currentLang);
+  const inbarNav = shadowRoot.querySelector<HTMLElement>('.pt-inbar-nav');
+  const hasMatches = currentSearchMode === 'page' && liveMatches.length > 0;
+  if (inbarNav) {
+    inbarNav.classList.toggle('visible', hasMatches);
+  }
+
+  const currEl = shadowRoot.querySelector<HTMLElement>('#pt-inbar-curr');
+  if (currEl) {
+    currEl.textContent = hasMatches ? String(currentLiveIndex + 1) : '0';
+  }
+
+  const totalEl = shadowRoot.querySelector<HTMLElement>('#pt-inbar-total');
+  if (totalEl) {
+    totalEl.textContent = String(liveMatches.length);
+  }
+
+  const expandBtn = shadowRoot.querySelector<HTMLButtonElement>('.pt-inbar-toggle-expand');
+  if (expandBtn) {
+    expandBtn.title = isPageResultsExpanded ? t.overlay.liveCollapseList : t.overlay.liveExpandList;
+    setSafeHtml(
+      expandBtn,
+      `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="${isPageResultsExpanded ? 'm18 15-6-6-6 6' : 'm6 9 6 6 6-6'}"/></svg>`
+    );
+  }
+
+  const modal = shadowRoot.querySelector<HTMLElement>('.pt-modal');
+  if (modal && currentSearchMode === 'page') {
+    modal.classList.toggle('collapsed', !isPageResultsExpanded);
+  }
+}
+
+function syncModeUI(): void {
+  if (!shadowRoot) return;
+  const t = getLocale(currentLang);
+  const isPage = currentSearchMode === 'page';
+
+  const backdrop = shadowRoot.querySelector<HTMLElement>('.pt-overlay-backdrop');
+  if (backdrop) {
+    backdrop.classList.toggle('page-mode', isPage);
+  }
+
+  const modal = shadowRoot.querySelector<HTMLElement>('.pt-modal');
+  if (modal) {
+    modal.classList.toggle('page-mode', isPage);
+    modal.classList.toggle('collapsed', isPage && !isPageResultsExpanded);
+  }
+
+  if (isPage) {
+    unlockPageScroll();
+  } else {
+    lockPageScroll();
+  }
+
+  const modeBtn = shadowRoot.querySelector<HTMLButtonElement>('.pt-mode-toggle');
+  if (modeBtn) {
+    modeBtn.classList.toggle('is-page', isPage);
+    modeBtn.title = isPage
+      ? `${t.overlay.modePageLabel}. ${t.overlay.modeTogglePage}`
+      : `${t.overlay.modeGlobalLabel}. ${t.overlay.modeToggleGlobal}`;
+    modeBtn.setAttribute('aria-label', modeBtn.title);
+    setSafeHtml(modeBtn, isPage ? PAGE_ICON_SVG : GLOBAL_ICON_SVG);
+  }
+
+  const input = shadowRoot.querySelector<HTMLInputElement>('.pt-search-input');
+  if (input) {
+    input.placeholder = isPage ? t.overlay.placeholderPage : t.overlay.placeholder;
+  }
+
+  const tabs = shadowRoot.querySelector<HTMLElement>('.pt-tabs');
+  if (tabs) {
+    tabs.classList.toggle('page-mode-hidden', isPage);
+  }
+
+  const footerHint = shadowRoot.querySelector<HTMLElement>('.pt-footer-hint');
+  if (footerHint) {
+    if (isPage) {
+      setSafeHtml(
+        footerHint,
+        `<span><kbd>↵</kbd> ${escapeHtml(t.overlay.liveNavNext)}</span><span><kbd>Shift+↵</kbd> ${escapeHtml(t.overlay.liveNavPrev)}</span><span><kbd>Esc</kbd> ${escapeHtml(t.overlay.hintClose)}</span>`
+      );
+    } else {
+      setSafeHtml(
+        footerHint,
+        `<span><kbd>↑↓</kbd> ${escapeHtml(t.overlay.hintNavigate)}</span><span><kbd>↵</kbd> ${escapeHtml(t.overlay.hintOpen)}</span><span><kbd>Esc</kbd> ${escapeHtml(t.overlay.hintClose)}</span>`
+      );
+    }
+  }
+
+  updateInbarNavVisuals();
+}
+
+export async function initOverlayInShadow(shadow: ShadowRoot, initialMode: SearchMode = 'global'): Promise<void> {
   shadowRoot = shadow;
   try {
     const s = await getSettings();
@@ -768,13 +1651,37 @@ export async function initOverlayInShadow(shadow: ShadowRoot): Promise<void> {
     shadow.appendChild(style);
   }
 
+  currentSearchMode = initialMode;
   renderOverlay();
   mountEventListeners();
+  syncModeUI();
   void refreshSuggestionsData();
+  const initialInput = shadowRoot.querySelector<HTMLInputElement>('.pt-search-input');
+  if (initialInput) {
+    void performSearch(initialInput.value);
+    initialInput.focus();
+    if (initialInput.value) {
+      initialInput.select();
+    }
+  }
 }
 
-export async function showOverlayInShadow(): Promise<void> {
-  lockPageScroll();
+export async function showOverlayInShadow(targetMode?: SearchMode): Promise<void> {
+  if (targetMode) {
+    currentSearchMode = targetMode;
+  }
+  if (searchDebounce) {
+    clearTimeout(searchDebounce);
+    searchDebounce = null;
+  }
+  hideFloatingNav();
+  const backdrop = shadowRoot?.querySelector<HTMLElement>('.pt-overlay-backdrop');
+  if (backdrop) backdrop.style.display = 'flex';
+  if (currentSearchMode === 'page') {
+    unlockPageScroll();
+  } else {
+    lockPageScroll();
+  }
   try {
     const s = await getSettings();
     tagCatalog = s.tagCatalog || [];
@@ -783,10 +1690,10 @@ export async function showOverlayInShadow(): Promise<void> {
     if (s.language && s.language !== currentLang) {
       currentLang = s.language;
       renderOverlay();
-      mountEventListeners();
     }
   } catch {}
   void refreshSuggestionsData();
+  syncModeUI();
   const input = shadowRoot?.querySelector<HTMLInputElement>('.pt-search-input');
   const clearBtn = shadowRoot?.querySelector<HTMLButtonElement>('.pt-clear-btn');
   if (input) {
@@ -827,7 +1734,11 @@ function unlockPageScroll(): void {
 
 function renderOverlay(): void {
   if (!shadowRoot) return;
-  lockPageScroll();
+  if (currentSearchMode === 'page') {
+    unlockPageScroll();
+  } else {
+    lockPageScroll();
+  }
 
   const existing = shadowRoot.querySelector('.pt-overlay-backdrop');
   if (existing) existing.remove();
@@ -842,6 +1753,7 @@ function renderOverlay(): void {
   });
 
   backdrop.addEventListener('wheel', (e) => {
+    if (currentSearchMode === 'page') return;
     const modal = shadowRoot?.querySelector('.pt-modal');
     if (!modal?.contains(e.target as Node)) {
       e.preventDefault();
@@ -849,6 +1761,7 @@ function renderOverlay(): void {
   }, { passive: false });
 
   backdrop.addEventListener('touchmove', (e) => {
+    if (currentSearchMode === 'page') return;
     const results = shadowRoot?.querySelector('.pt-results');
     if (!results?.contains(e.target as Node)) {
       e.preventDefault();
@@ -867,18 +1780,41 @@ function buildModalHTML(): string {
   return `
     <div class="pt-modal" role="dialog" aria-modal="true" aria-label="PageTrace Search">
       <div class="pt-search-bar">
+        <button
+          class="pt-mode-toggle ${currentSearchMode === 'page' ? 'is-page' : ''}"
+          type="button"
+          title="${currentSearchMode === 'page' ? escapeAttr(t.overlay.modePageLabel + '. ' + t.overlay.modeTogglePage) : escapeAttr(t.overlay.modeGlobalLabel + '. ' + t.overlay.modeToggleGlobal)}"
+          aria-label="${currentSearchMode === 'page' ? escapeAttr(t.overlay.modePageLabel + '. ' + t.overlay.modeTogglePage) : escapeAttr(t.overlay.modeGlobalLabel + '. ' + t.overlay.modeToggleGlobal)}"
+        >
+          ${currentSearchMode === 'page' ? PAGE_ICON_SVG : GLOBAL_ICON_SVG}
+        </button>
         <svg class="pt-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
         </svg>
         <input
           class="pt-search-input"
           type="text"
-          placeholder="${escapeAttr(t.overlay.placeholder)}"
+          placeholder="${currentSearchMode === 'page' ? escapeAttr(t.overlay.placeholderPage) : escapeAttr(t.overlay.placeholder)}"
           autocomplete="off"
           spellcheck="false"
           aria-label="Search query"
         />
+        <div class="pt-inbar-nav ${currentSearchMode === 'page' && liveMatches.length > 0 ? 'visible' : ''}">
+          <span class="pt-inbar-counter"><span id="pt-inbar-curr">${liveMatches.length > 0 ? currentLiveIndex + 1 : 0}</span>/<span id="pt-inbar-total">${liveMatches.length}</span></span>
+          <button class="pt-inbar-btn pt-inbar-prev" type="button" title="${escapeAttr(t.overlay.liveNavPrev)}">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m18 15-6-6-6 6"/></svg>
+          </button>
+          <button class="pt-inbar-btn pt-inbar-next" type="button" title="${escapeAttr(t.overlay.liveNavNext)}">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>
+          </button>
+          <button class="pt-inbar-btn pt-inbar-toggle-expand" type="button" title="${isPageResultsExpanded ? escapeAttr(t.overlay.liveCollapseList) : escapeAttr(t.overlay.liveExpandList)}">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="${isPageResultsExpanded ? 'm18 15-6-6-6 6' : 'm6 9 6 6 6-6'}"/></svg>
+          </button>
+        </div>
         <button class="pt-clear-btn" type="button" aria-label="Clear">✕</button>
+        <button class="pt-close-btn" type="button" title="${escapeAttr(t.overlay.hintClose)}">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+        </button>
         <div class="pt-kbd">
           <kbd>Esc</kbd>
         </div>
@@ -886,7 +1822,7 @@ function buildModalHTML(): string {
       <div class="pt-autocomplete-wrap">
         <div class="pt-autocomplete" role="listbox" aria-label="${escapeAttr(t.overlay.autocompleteHint)}"></div>
       </div>
-      <div class="pt-tabs">
+      <div class="pt-tabs ${currentSearchMode === 'page' ? 'page-mode-hidden' : ''}">
         <div class="pt-filter-group pt-filter-group-left">
           <div class="pt-pill-wrap ${activeTab !== 'all' ? 'active' : ''}">
             <select
@@ -952,9 +1888,9 @@ function buildModalHTML(): string {
       <div class="pt-footer">
         <span class="pt-footer-count" id="pt-count"></span>
         <div class="pt-footer-hint">
-          <span><kbd>↑↓</kbd> ${escapeHtml(t.overlay.hintNavigate)}</span>
-          <span><kbd>↵</kbd> ${escapeHtml(t.overlay.hintOpen)}</span>
-          <span><kbd>Esc</kbd> ${escapeHtml(t.overlay.hintClose)}</span>
+          ${currentSearchMode === 'page'
+            ? `<span><kbd>↵</kbd> ${escapeHtml(t.overlay.liveNavNext)}</span><span><kbd>Shift+↵</kbd> ${escapeHtml(t.overlay.liveNavPrev)}</span><span><kbd>Esc</kbd> ${escapeHtml(t.overlay.hintClose)}</span>`
+            : `<span><kbd>↑↓</kbd> ${escapeHtml(t.overlay.hintNavigate)}</span><span><kbd>↵</kbd> ${escapeHtml(t.overlay.hintOpen)}</span><span><kbd>Esc</kbd> ${escapeHtml(t.overlay.hintClose)}</span>`}
         </div>
       </div>
     </div>
@@ -1050,6 +1986,11 @@ function bindModalInteractiveListeners(): void {
   if (!shadowRoot) return;
 
   const input = shadowRoot.querySelector<HTMLInputElement>('.pt-search-input');
+  const modeBtn = shadowRoot.querySelector<HTMLButtonElement>('.pt-mode-toggle');
+  modeBtn?.addEventListener('click', () => {
+    setSearchMode(currentSearchMode === 'global' ? 'page' : 'global');
+  });
+
   const clearBtn = shadowRoot.querySelector<HTMLButtonElement>('.pt-clear-btn');
   clearBtn?.addEventListener('click', () => {
     if (input) {
@@ -1059,16 +2000,36 @@ function bindModalInteractiveListeners(): void {
       input.focus();
     }
   });
+
+  shadowRoot.querySelector('.pt-inbar-prev')?.addEventListener('click', () => {
+    activateLiveMatch(currentLiveIndex - 1);
+  });
+
+  shadowRoot.querySelector('.pt-inbar-next')?.addEventListener('click', () => {
+    activateLiveMatch(currentLiveIndex + 1);
+  });
+
+  shadowRoot.querySelector('.pt-inbar-toggle-expand')?.addEventListener('click', () => {
+    isPageResultsExpanded = !isPageResultsExpanded;
+    updateInbarNavVisuals();
+  });
+
+  shadowRoot.querySelector('.pt-close-btn')?.addEventListener('click', () => {
+    closeOverlay();
+  });
   input?.addEventListener('input', (e) => {
     const q = (e.target as HTMLInputElement).value;
     clearBtn?.classList.toggle('visible', q.length > 0);
-    const cursorPos = input.selectionStart ?? q.length;
-
-    currentTokenInfo = getAutocompleteTokenInfo(q, cursorPos);
-    if (currentTokenInfo && (currentTokenInfo.prefix || currentTokenInfo.filter.length >= 1)) {
-      autocompleteItems = generateSearchSuggestions(currentTokenInfo, availableTags, availableDomains);
-      if (autocompleteItems.length > 0) {
-        renderAutocompleteDropdown(autocompleteItems);
+    if (currentSearchMode === 'global') {
+      const cursorPos = input.selectionStart ?? q.length;
+      currentTokenInfo = getAutocompleteTokenInfo(q, cursorPos);
+      if (currentTokenInfo && (currentTokenInfo.prefix || currentTokenInfo.filter.length >= 1)) {
+        autocompleteItems = generateSearchSuggestions(currentTokenInfo, availableTags, availableDomains);
+        if (autocompleteItems.length > 0) {
+          renderAutocompleteDropdown(autocompleteItems);
+        } else {
+          hideAutocompleteDropdown();
+        }
       } else {
         hideAutocompleteDropdown();
       }
@@ -1145,13 +2106,21 @@ function mountEventListeners(): void {
   if (!shadowRoot || isListenersMounted) return;
   isListenersMounted = true;
 
+  shadowRoot.addEventListener('keyup', (e: Event) => {
+    e.stopPropagation();
+  });
+  shadowRoot.addEventListener('keypress', (e: Event) => {
+    e.stopPropagation();
+  });
+
   shadowRoot.addEventListener('keydown', (e: Event) => {
     const ke = e as KeyboardEvent;
+    ke.stopPropagation();
     if (ke.key !== 'Escape' && ke.target instanceof HTMLSelectElement) {
       return;
     }
 
-    if (autocompleteItems.length > 0) {
+    if (currentSearchMode === 'global' && autocompleteItems.length > 0) {
       if (ke.key === 'ArrowDown') {
         ke.preventDefault();
         autocompleteActiveIndex = (autocompleteActiveIndex + 1) % autocompleteItems.length;
@@ -1180,6 +2149,7 @@ function mountEventListeners(): void {
 
     switch (ke.key) {
       case 'Escape':
+        ke.preventDefault();
         closeOverlay();
         break;
       case 'ArrowDown':
@@ -1191,6 +2161,20 @@ function mountEventListeners(): void {
         navigate(-1);
         break;
       case 'Enter':
+        if (currentSearchMode === 'page') {
+          ke.preventDefault();
+          if (liveMatches.length === 0) break;
+          if (isPageResultsExpanded) {
+            activateLiveMatchAndDock(focusedLiveIndex);
+            break;
+          }
+          if (ke.shiftKey) {
+            activateLiveMatch(currentLiveIndex - 1, 'smooth');
+          } else {
+            activateLiveMatch(currentLiveIndex + 1, 'smooth');
+          }
+          break;
+        }
         openFocused();
         break;
     }
@@ -1222,6 +2206,41 @@ function getEffectiveSort(query: string): SearchSortOption {
 async function performSearch(query: string): Promise<void> {
   const t = getLocale(currentLang);
   const trimmed = query.trim();
+
+  if (currentSearchMode === 'page') {
+    hideAutocompleteDropdown();
+    const countEl = shadowRoot?.querySelector<HTMLElement>('#pt-count');
+    if (!trimmed) {
+      liveMatches = [];
+      currentLiveIndex = -1;
+      focusedLiveIndex = 0;
+      clearLiveHighlights();
+      updateInbarNavVisuals();
+      if (countEl) countEl.textContent = '';
+      renderLiveEmpty(t.overlay.emptyInitial);
+      return;
+    }
+
+    liveMatches = findLivePageMatches(trimmed);
+    currentLiveIndex = liveMatches.length > 0 ? 0 : -1;
+    focusedLiveIndex = 0;
+    updateInbarNavVisuals();
+
+    if (countEl) {
+      countEl.textContent = t.overlay.liveMatchesCount(liveMatches.length);
+    }
+
+    if (liveMatches.length === 0) {
+      clearLiveHighlights();
+      renderLiveEmpty(t.overlay.liveNoResults);
+      return;
+    }
+
+    activateLiveMatch(0, 'none');
+    renderLiveResults();
+    return;
+  }
+
 
   const isDefaultBrowse =
     !trimmed &&
@@ -1444,7 +2463,8 @@ function createOverlayResultElement(group: GroupedSearchResult, idx: number): HT
     } else {
       expandedUrls.add(norm);
     }
-    renderResults();
+    const newEl = createOverlayResultElement(group, idx);
+    el.replaceWith(newEl);
   });
 
   el.querySelectorAll<HTMLElement>('.pt-submatch-item').forEach((subEl) => {
@@ -1724,7 +2744,18 @@ function renderEmpty(msg: string): void {
 }
 
 function navigate(delta: number): void {
-  if (!shadowRoot || groupedResults.length === 0) return;
+  if (!shadowRoot) return;
+  if (currentSearchMode === 'page') {
+    if (liveMatches.length === 0) return;
+    focusedLiveIndex = (focusedLiveIndex + delta + liveMatches.length) % liveMatches.length;
+    updateFocus();
+    const liveItems = shadowRoot.querySelectorAll<HTMLElement>('.pt-live-item');
+    liveItems[focusedLiveIndex]?.scrollIntoView({ block: 'nearest' });
+    activateLiveMatch(focusedLiveIndex, 'smooth');
+    return;
+  }
+
+  if (groupedResults.length === 0) return;
   focusedIndex = Math.max(0, Math.min(groupedResults.length - 1, focusedIndex + delta));
   if (focusedIndex >= displayedCount) {
     loadMoreOverlayResults();
@@ -1736,12 +2767,24 @@ function navigate(delta: number): void {
 
 function updateFocus(): void {
   if (!shadowRoot) return;
+  if (currentSearchMode === 'page') {
+    shadowRoot.querySelectorAll<HTMLElement>('.pt-live-item').forEach((el, i) => {
+      el.classList.toggle('focused', i === focusedLiveIndex);
+    });
+    return;
+  }
   shadowRoot.querySelectorAll<HTMLElement>('.pt-result').forEach((el, i) => {
     el.classList.toggle('focused', i === focusedIndex);
   });
 }
 
 function openFocused(): void {
+  if (currentSearchMode === 'page') {
+    if (liveMatches[focusedLiveIndex]) {
+      activateLiveMatchAndDock(focusedLiveIndex);
+    }
+    return;
+  }
   if (groupedResults[focusedIndex]) openResult(groupedResults[focusedIndex]!.primary);
 }
 
@@ -1767,7 +2810,22 @@ function openResult(r: SearchResult): void {
   }
 }
 
+export function getCurrentSearchMode(): SearchMode {
+  return currentSearchMode;
+}
+
+export function isOverlayOpen(): boolean {
+  const host = document.getElementById('pagetrace-overlay-host');
+  return Boolean(host && host.style.display !== 'none');
+}
+
 export function closeOverlay(): void {
+  if (searchDebounce) {
+    clearTimeout(searchDebounce);
+    searchDebounce = null;
+  }
+  hideFloatingNav();
+  clearLiveHighlights();
   unlockPageScroll();
   hideAutocompleteDropdown();
   const host = document.getElementById('pagetrace-overlay-host');
@@ -1777,17 +2835,4 @@ export function closeOverlay(): void {
   }
 }
 
-const host = document.getElementById('pagetrace-overlay-host');
-if (host) {
-  host.addEventListener('pt:init', (e) => {
-    const detail = (e as CustomEvent).detail as { shadow?: ShadowRoot } | undefined;
-    const shadow = detail?.shadow || host.shadowRoot;
-    if (shadow) {
-      void initOverlayInShadow(shadow);
-    }
-  });
 
-  host.addEventListener('pt:show', () => {
-    void showOverlayInShadow();
-  });
-}

@@ -24,6 +24,8 @@ export interface LocaleTranslations {
       hotkeyResetBtn: string;
       hotkeyInputTitle: string;
       hotkeysHintHtml: string;
+      liveHotkeyLabel: string;
+      liveHotkeyHintHtml: string;
       searchLimitsSection: string;
       searchMaxResultsLabel: string;
       searchMaxResultsHint: string;
@@ -32,6 +34,7 @@ export interface LocaleTranslations {
     };
     indexing: {
       rulesSection: string;
+      depthSection: string;
       depthLabel: string;
       depthHeadings: string;
       depthSemantic: string;
@@ -287,6 +290,19 @@ export interface LocaleTranslations {
     collapseMatches: string;
     pageMatchesTitle: string;
     autocompleteHint: string;
+    modeToggleGlobal: string;
+    modeTogglePage: string;
+    modeGlobalLabel: string;
+    modePageLabel: string;
+    placeholderPage: string;
+    liveNoResults: string;
+    liveMatchesCount: (count: number) => string;
+    liveNavPrev: string;
+    liveNavNext: string;
+    liveNavClose: string;
+    liveNavExpand: string;
+    liveExpandList: string;
+    liveCollapseList: string;
   };
   content: {
     createIndexBtn: string;
