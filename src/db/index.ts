@@ -101,12 +101,16 @@ function getMediaUniqueKey(m: Pick<MediaItem, 'type' | 'url' | 'title' | 'alt' |
 
 export async function deletePagesCascade(pageIds: number[]): Promise<void> {
   if (pageIds.length === 0) return;
-  await db.transaction('rw', db.pages, db.text_chunks, db.media_items, db.custom_indexes, async () => {
-    await db.text_chunks.where('pageId').anyOf(pageIds).delete();
-    await db.media_items.where('pageId').anyOf(pageIds).delete();
-    await db.custom_indexes.where('pageId').anyOf(pageIds).delete();
-    await db.pages.bulkDelete(pageIds);
-  });
+  const CHUNK_SIZE = 200;
+  for (let i = 0; i < pageIds.length; i += CHUNK_SIZE) {
+    const chunk = pageIds.slice(i, i + CHUNK_SIZE);
+    await db.transaction('rw', db.pages, db.text_chunks, db.media_items, db.custom_indexes, async () => {
+      await db.text_chunks.where('pageId').anyOf(chunk).delete();
+      await db.media_items.where('pageId').anyOf(chunk).delete();
+      await db.custom_indexes.where('pageId').anyOf(chunk).delete();
+      await db.pages.bulkDelete(chunk);
+    });
+  }
 }
 
 export async function deletePageById(pageId: number): Promise<void> {
@@ -529,8 +533,10 @@ export async function cleanupExpired(ttlDays: number, pinnedDomains?: string[]):
 // Remove oldest unpinned pages if total size exceeds maxSizeMb
 export async function evictLRU(maxSizeMb: number, pinnedDomains?: string[]): Promise<void> {
   const maxBytes = maxSizeMb * 1024 * 1024;
-  const pages = await db.pages.orderBy('lastAccessedAt').toArray();
-  let total = pages.reduce((s, p) => s + (p.sizeBytes ?? 0), 0);
+  let total = 0;
+  await db.pages.each((p) => {
+    total += p.sizeBytes ?? 0;
+  });
 
   if (total <= maxBytes) return;
 
@@ -545,16 +551,22 @@ export async function evictLRU(maxSizeMb: number, pinnedDomains?: string[]): Pro
   }
 
   const idsToEvict: number[] = [];
-  for (const page of pages) {
-    if (total <= maxBytes) break;
-    if (page.id !== undefined) {
-      if (isUrlPinned(page.url, pinned)) {
-        continue;
+  let stopped = false;
+  await db.pages
+    .orderBy('lastAccessedAt')
+    .until(() => stopped)
+    .each((page) => {
+      if (page.id !== undefined) {
+        if (isUrlPinned(page.url, pinned)) {
+          return;
+        }
+        idsToEvict.push(page.id);
+        total -= page.sizeBytes ?? 0;
+        if (total <= maxBytes) {
+          stopped = true;
+        }
       }
-      idsToEvict.push(page.id);
-      total -= page.sizeBytes ?? 0;
-    }
-  }
+    });
 
   if (idsToEvict.length > 0) {
     await deletePagesCascade(idsToEvict);

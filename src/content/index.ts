@@ -303,26 +303,41 @@ function extractPageMeta(): Omit<TextChunk, 'id' | 'pageId' | 'createdAt'>[] {
 }
 
 const NOISE_CLASS_ID_REGEX = /cookie|consent|banner-ad|advertisement|sidebar-menu|popup-modal|popup-overlay/i;
+const noiseCheckCache = new WeakMap<Element, boolean>();
 
 function isBoilerplateOrNoise(el: Element): boolean {
+  const cached = noiseCheckCache.get(el);
+  if (cached !== undefined) return cached;
+
   const noiseContainer = el.closest(
     'header, footer, nav, aside, dialog, [role="navigation"], [role="banner"], [role="contentinfo"], [role="dialog"], [aria-modal="true"]',
   );
-  if (noiseContainer) return true;
+  if (noiseContainer) {
+    noiseCheckCache.set(el, true);
+    return true;
+  }
 
   let current: Element | null = el;
   let depth = 0;
+  let isNoise = false;
   while (current && current !== document.body && depth < 4) {
+    const parentCached = noiseCheckCache.get(current);
+    if (parentCached !== undefined) {
+      isNoise = parentCached;
+      break;
+    }
     const cls = typeof current.className === 'string' ? current.className : '';
     const id = current.id || '';
     if ((cls || id) && NOISE_CLASS_ID_REGEX.test(`${cls} ${id}`)) {
-      return true;
+      isNoise = true;
+      break;
     }
     current = current.parentElement;
     depth++;
   }
 
-  return false;
+  noiseCheckCache.set(el, isNoise);
+  return isNoise;
 }
 
 function getMatchingSiteTags(url: string, siteRules: SiteTagRule[] = []): string | null {
@@ -454,11 +469,15 @@ function extractTextChunks(
       pushUniqueChunk(el, text, level);
     });
 
-    const primaryContainers = Array.from(
+    const rawContainers = Array.from(
       document.querySelectorAll<HTMLElement>(
         'article, main, [role="main"], [role="article"], .content, .post-content, .article-content, .entry-content, .markdown-body, #content, #main',
       ),
     ).filter((c) => !isHidden(c) && !isBoilerplateOrNoise(c));
+
+    const primaryContainers = rawContainers.filter(
+      (c) => !rawContainers.some((other) => other !== c && other.contains(c)),
+    );
 
     const contentTargets = primaryContainers.length > 0 ? primaryContainers : [document.body];
 
@@ -1036,14 +1055,29 @@ function getCSSSelector(el: Element): string {
 function initSelectionIndexingWatcher(): void {
   if (isIncognito()) return;
 
-  const host = document.createElement('div');
-  host.id = 'pagetrace-selection-host';
-  host.style.cssText = 'all: initial; position: fixed; top: 0; left: 0; width: 0; height: 0; z-index: 2147483646; pointer-events: none;';
-  document.documentElement.appendChild(host);
+  let host: HTMLDivElement | null = null;
+  let shadow: ShadowRoot | null = null;
+  let wrapper: HTMLDivElement | null = null;
+  let pillBtn: HTMLButtonElement | null = null;
+  let popoverCard: HTMLElement | null = null;
+  let closeBtn: HTMLButtonElement | null = null;
+  let cancelBtn: HTMLButtonElement | null = null;
+  let saveBtn: HTMLButtonElement | null = null;
+  let snippetQuote: HTMLElement | null = null;
+  let indexNameInput: HTMLInputElement | null = null;
+  let indexNoteInput: HTMLTextAreaElement | null = null;
 
-  const shadow = host.attachShadow({ mode: 'open' });
+  function ensureSelectionWidgetDom(): void {
+    if (host) return;
 
-  const style = document.createElement('style');
+    host = document.createElement('div');
+    host.id = 'pagetrace-selection-host';
+    host.style.cssText = 'all: initial; position: fixed; top: 0; left: 0; width: 0; height: 0; z-index: 2147483646; pointer-events: none;';
+    document.documentElement.appendChild(host);
+
+    shadow = host.attachShadow({ mode: 'open' });
+
+    const style = document.createElement('style');
   style.textContent = `
     * {
       box-sizing: border-box;
@@ -1257,7 +1291,7 @@ function initSelectionIndexingWatcher(): void {
   `;
   shadow.appendChild(style);
 
-  const wrapper = document.createElement('div');
+  wrapper = document.createElement('div');
   wrapper.className = 'pt-selection-wrapper';
 
   setSafeHtml(
@@ -1290,16 +1324,58 @@ function initSelectionIndexingWatcher(): void {
     </div>
   `,
   );
-  shadow.appendChild(wrapper);
+    shadow.appendChild(wrapper);
 
-  const pillBtn = shadow.getElementById('ptPillBtn') as HTMLButtonElement;
-  const popoverCard = shadow.getElementById('ptPopoverCard') as HTMLElement;
-  const closeBtn = shadow.getElementById('ptCloseBtn') as HTMLButtonElement;
-  const cancelBtn = shadow.getElementById('ptCancelBtn') as HTMLButtonElement;
-  const saveBtn = shadow.getElementById('ptSaveBtn') as HTMLButtonElement;
-  const snippetQuote = shadow.getElementById('ptSnippetQuote') as HTMLElement;
-  const indexNameInput = shadow.getElementById('ptIndexName') as HTMLInputElement;
-  const indexNoteInput = shadow.getElementById('ptIndexNote') as HTMLTextAreaElement;
+    pillBtn = shadow.getElementById('ptPillBtn') as HTMLButtonElement;
+    popoverCard = shadow.getElementById('ptPopoverCard') as HTMLElement;
+    closeBtn = shadow.getElementById('ptCloseBtn') as HTMLButtonElement;
+    cancelBtn = shadow.getElementById('ptCancelBtn') as HTMLButtonElement;
+    saveBtn = shadow.getElementById('ptSaveBtn') as HTMLButtonElement;
+    snippetQuote = shadow.getElementById('ptSnippetQuote') as HTMLElement;
+    indexNameInput = shadow.getElementById('ptIndexName') as HTMLInputElement;
+    indexNoteInput = shadow.getElementById('ptIndexNote') as HTMLTextAreaElement;
+
+    pillBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      showPopoverCard(currentSelectedText, currentTargetElement, currentRange);
+    });
+
+    saveBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      void saveCurrentIndex();
+    });
+
+    indexNameInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        void saveCurrentIndex();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        hideWidget();
+      }
+    });
+
+    indexNoteInput.addEventListener('keydown', (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+        e.preventDefault();
+        void saveCurrentIndex();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        hideWidget();
+      }
+    });
+
+    closeBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      hideWidget();
+    });
+
+    cancelBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      hideWidget();
+    });
+  }
 
   let currentSelectedText = '';
   let currentTargetElement: HTMLElement | null = null;
@@ -1326,9 +1402,9 @@ function initSelectionIndexingWatcher(): void {
   }
 
   function hideWidget(): void {
-    wrapper.style.display = 'none';
-    pillBtn.style.display = 'none';
-    popoverCard.style.display = 'none';
+    if (wrapper) wrapper.style.display = 'none';
+    if (pillBtn) pillBtn.style.display = 'none';
+    if (popoverCard) popoverCard.style.display = 'none';
     isPopoverOpen = false;
     currentSelectedText = '';
     currentTargetElement = null;
@@ -1337,6 +1413,9 @@ function initSelectionIndexingWatcher(): void {
 
   function showPopoverCard(text: string, element: HTMLElement | null, range: Range | null): void {
     if (!text) return;
+
+    ensureSelectionWidgetDom();
+    if (!wrapper || !pillBtn || !popoverCard || !snippetQuote || !indexNameInput) return;
 
     currentSelectedText = text;
     currentTargetElement = element;
@@ -1386,12 +1465,12 @@ function initSelectionIndexingWatcher(): void {
     wrapper.style.left = `${popLeft}px`;
 
     setTimeout(() => {
-      indexNameInput.focus();
+      indexNameInput?.focus();
     }, 50);
   }
 
   async function saveCurrentIndex(): Promise<void> {
-    if (!currentSelectedText) return;
+    if (!currentSelectedText || !indexNameInput) return;
 
     const selectedText = currentSelectedText;
     const targetElement = currentTargetElement;
@@ -1434,12 +1513,6 @@ function initSelectionIndexingWatcher(): void {
     }
   }
 
-  pillBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    e.preventDefault();
-    showPopoverCard(currentSelectedText, currentTargetElement, currentRange);
-  });
-
   // Triggered from the right-click context menu
   window.addEventListener('pt:trigger-create-index', async (e) => {
     try {
@@ -1448,7 +1521,6 @@ function initSelectionIndexingWatcher(): void {
         currentLang = settings.language;
       }
     } catch {}
-    updateWidgetText();
 
     const detail = (e as CustomEvent).detail as { text?: string };
     const sel = window.getSelection();
@@ -1477,67 +1549,52 @@ function initSelectionIndexingWatcher(): void {
     }
   });
 
-  saveBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    void saveCurrentIndex();
-  });
-
-  indexNameInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      void saveCurrentIndex();
-    } else if (e.key === 'Escape') {
-      e.preventDefault();
-      hideWidget();
-    }
-  });
-
-  indexNoteInput.addEventListener('keydown', (e) => {
-    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-      e.preventDefault();
-      void saveCurrentIndex();
-    } else if (e.key === 'Escape') {
-      e.preventDefault();
-      hideWidget();
-    }
-  });
-
-  closeBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    hideWidget();
-  });
-
-  cancelBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    hideWidget();
-  });
-
   document.addEventListener('mousedown', (e) => {
-    const path = e.composedPath();
-    if (path.includes(host)) return;
-    if (isPopoverOpen || wrapper.style.display === 'block') {
+    if (host) {
+      const path = e.composedPath();
+      if (path.includes(host)) return;
+    }
+    if (isPopoverOpen || (wrapper && wrapper.style.display === 'block')) {
       hideWidget();
     }
   });
 
   window.addEventListener('scroll', () => {
-    if (!isPopoverOpen && wrapper.style.display === 'block') {
+    if (!isPopoverOpen && wrapper && wrapper.style.display === 'block') {
       hideWidget();
     }
   }, { passive: true });
 
   document.addEventListener('mouseup', () => {
+    if (isPopoverOpen) return;
+
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || sel.rangeCount === 0) {
+      if (wrapper && wrapper.style.display === 'block') {
+        hideWidget();
+      }
+      return;
+    }
+
+    const text = sel.toString().trim();
+    if (text.length < 2) {
+      if (wrapper && wrapper.style.display === 'block') {
+        hideWidget();
+      }
+      return;
+    }
+
     setTimeout(async () => {
       if (isPopoverOpen) return;
 
-      const sel = window.getSelection();
-      if (!sel || sel.isCollapsed || sel.rangeCount === 0) {
+      const activeSel = window.getSelection();
+      if (!activeSel || activeSel.isCollapsed || activeSel.rangeCount === 0) {
         hideWidget();
         return;
       }
 
-      const text = sel.toString().trim();
-      if (text.length < 2) {
+      const activeText = activeSel.toString().trim();
+      if (activeText.length < 2) {
         hideWidget();
         return;
       }
@@ -1553,13 +1610,9 @@ function initSelectionIndexingWatcher(): void {
         if (trigger === 'contextmenu') {
           return;
         }
-      } catch {
-        // Continue if storage query fails
-      }
-      updateWidgetText();
+      } catch {}
 
-      // Ignore selections inside inputs or extension overlays
-      const range = sel.getRangeAt(0);
+      const range = activeSel.getRangeAt(0);
       const container = range.commonAncestorContainer;
       const parentEl = (container.nodeType === Node.ELEMENT_NODE
         ? (container as Element)
@@ -1568,7 +1621,7 @@ function initSelectionIndexingWatcher(): void {
       if (!parentEl) return;
       if (
         parentEl.closest('#pagetrace-overlay-host') ||
-        parentEl.closest('#pagetrace-selection-host') ||
+        (host && parentEl.closest('#pagetrace-selection-host')) ||
         parentEl.closest('input, textarea, select, button, [contenteditable="true"]')
       ) {
         return;
@@ -1577,7 +1630,11 @@ function initSelectionIndexingWatcher(): void {
       const rect = range.getBoundingClientRect();
       if (rect.width === 0 && rect.height === 0) return;
 
-      currentSelectedText = text;
+      ensureSelectionWidgetDom();
+      updateWidgetText();
+      if (!wrapper || !pillBtn || !popoverCard) return;
+
+      currentSelectedText = activeText;
       currentTargetElement = parentEl;
       currentRange = range.cloneRange();
 

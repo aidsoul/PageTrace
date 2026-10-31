@@ -20,7 +20,8 @@
     "alarms",
     "tabs",
     "activeTab",
-    "contextMenus"
+    "contextMenus",
+    "unlimitedStorage"
   ],
 
   "host_permissions": [
