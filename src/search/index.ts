@@ -8,6 +8,7 @@ import type {
   SearchFilterOptions,
   SearchTypeFilter,
   SearchSortOption,
+  SearchDoc,
 } from '@/types/index';
 import { normalizeTagName, matchUrlPattern } from '@/common/tags';
 import {
@@ -51,31 +52,8 @@ export {
   type GroupedSearchResult,
   type SearchSuggestionItem,
   type AutocompleteTokenInfo,
+  type SearchDoc,
 };
-
-// In-memory search index built from DB records
-
-export interface SearchDoc {
-  id: string;
-  numericId: number;
-  pageId: number;
-  url: string;
-  hostnameLower: string;
-  urlLower: string;
-  title: string;
-  favicon: string;
-  text: string;
-  /** Optional user note or comment */
-  note?: string;
-  selector: string;
-  type: 'text' | 'media' | 'tag';
-  tagName?: string;
-  tagNameLower: string;
-  normTags: string[];
-  tags?: string[];
-  createdAt?: number;
-  visitCount?: number;
-}
 
 export interface SerializedSearchIndexSnapshot {
   version: 1;
@@ -88,6 +66,13 @@ let searchIndex: MiniSearch<SearchDoc> | null = null;
 let allSearchDocs: SearchDoc[] = [];
 let indexedDocCount = 0;
 let indexedRevision = -1;
+let cachedTags: string[] | null = null;
+let cachedDomains: string[] | null = null;
+
+function invalidateAvailableCaches(): void {
+  cachedTags = null;
+  cachedDomains = null;
+}
 
 function sanitizeFavicon(raw?: string): string {
   if (!raw) return '';
@@ -159,24 +144,28 @@ export function getIndexedCount(): number {
 
 // Return unique normalized tags present across all indexed documents
 export function getAvailableTags(): string[] {
+  if (cachedTags) return cachedTags;
   const tagSet = new Set<string>();
   for (const doc of allSearchDocs) {
     for (const t of doc.normTags) {
       tagSet.add(t);
     }
   }
-  return Array.from(tagSet).sort();
+  cachedTags = Array.from(tagSet).sort();
+  return cachedTags;
 }
 
 // Return unique lowercased hostnames present across all indexed documents
 export function getAvailableDomains(): string[] {
+  if (cachedDomains) return cachedDomains;
   const domainSet = new Set<string>();
   for (const doc of allSearchDocs) {
     if (doc.hostnameLower) {
       domainSet.add(doc.hostnameLower);
     }
   }
-  return Array.from(domainSet).sort();
+  cachedDomains = Array.from(domainSet).sort();
+  return cachedDomains;
 }
 
 function buildCustomTagDoc(tag: CustomTagIndex, page?: PageRecord): SearchDoc {
@@ -387,6 +376,7 @@ export async function rebuildIndex(
   searchIndex = idx;
   allSearchDocs = docs;
   indexedDocCount = docs.length;
+  invalidateAvailableCaches();
   if (revision !== undefined) {
     indexedRevision = revision;
   }
@@ -449,6 +439,7 @@ export function upsertPageInIndex(
 
   allSearchDocs = remainingDocs;
   indexedDocCount = allSearchDocs.length;
+  invalidateAvailableCaches();
   if (revision !== undefined) {
     indexedRevision = revision;
   }
@@ -478,6 +469,7 @@ export function upsertCustomIndexInSearch(
     allSearchDocs.push(doc);
   }
   indexedDocCount = allSearchDocs.length;
+  invalidateAvailableCaches();
   if (revision !== undefined) {
     indexedRevision = revision;
   }
@@ -495,6 +487,7 @@ export function removeCustomIndexesFromSearch(tagIds: number[], revision?: numbe
 
   allSearchDocs = allSearchDocs.filter((d) => !docIdsToRemove.has(d.id));
   indexedDocCount = allSearchDocs.length;
+  invalidateAvailableCaches();
   if (revision !== undefined) {
     indexedRevision = revision;
   }
@@ -527,6 +520,7 @@ export function removePagesFromIndex(
 
   allSearchDocs = remainingDocs;
   indexedDocCount = allSearchDocs.length;
+  invalidateAvailableCaches();
   if (revision !== undefined) {
     indexedRevision = revision;
   }
@@ -539,6 +533,7 @@ export function clearSearchIndex(revision?: number): void {
   searchIndex = buildIndex();
   allSearchDocs = [];
   indexedDocCount = 0;
+  invalidateAvailableCaches();
   if (revision !== undefined) {
     indexedRevision = revision;
   }
@@ -577,6 +572,7 @@ export function hydrateSearchIndex(snapshot: unknown): boolean {
     searchIndex = loaded;
     allSearchDocs = candidate.docs;
     indexedDocCount = candidate.docs.length;
+    invalidateAvailableCaches();
     if (typeof candidate.revision === 'number') {
       indexedRevision = candidate.revision;
     }

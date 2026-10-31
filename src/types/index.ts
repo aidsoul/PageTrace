@@ -370,3 +370,25 @@ export interface SearchResult {
   score: number;
 }
 
+/** In-memory document indexed by MiniSearch */
+export interface SearchDoc {
+  id: string;
+  numericId: number;
+  pageId: number;
+  url: string;
+  hostnameLower: string;
+  urlLower: string;
+  title: string;
+  favicon: string;
+  text: string;
+  note?: string;
+  selector: string;
+  type: 'text' | 'media' | 'tag';
+  tagName?: string;
+  tagNameLower: string;
+  normTags: string[];
+  tags?: string[];
+  createdAt?: number;
+  visitCount?: number;
+}
+

@@ -3,6 +3,7 @@ import type { IndexDepth, IndexPageMessage, MediaItem, SiteTagRule, TextChunk, U
 import { getLocale, DEFAULT_LANGUAGE } from '@/i18n/index';
 import { setSafeHtml, matchUrlPattern } from '@/common/tags';
 import { getSettings, matchesHotkey } from '@/common/settings';
+import { normalizeIndexedText as normalizeSearchText } from '@/common/search-utils';
 
 // Content script: DOM parser, indexer, and in-page UI
 
@@ -649,10 +650,6 @@ function extractMedia(
 }
 
 // Scroll and highlight matched text on page
-function normalizeSearchText(s: string): string {
-  return s.replace(/\s+/g, ' ').trim().toLowerCase();
-}
-
 function ensureHighlightStyles(): void {
   if (document.getElementById('pagetrace-highlight-styles')) return;
   const style = document.createElement('style');
@@ -774,14 +771,29 @@ function findTargetElement(text: string, selector: string): HTMLElement | null {
   return null;
 }
 
-export async function scrollAndHighlight(text: string, selector: string, attempt = 0): Promise<void> {
+let latestScrollToken = 0;
+
+export async function scrollAndHighlight(
+  text: string,
+  selector: string,
+  attempt = 0,
+  token?: number,
+): Promise<void> {
+  if (attempt === 0) {
+    token = ++latestScrollToken;
+  } else if (token !== latestScrollToken) {
+    return;
+  }
+
   const target = findTargetElement(text, selector);
 
   if (!target) {
     // Retry for dynamically rendered SPA content
     if (attempt < 10) {
       setTimeout(() => {
-        void scrollAndHighlight(text, selector, attempt + 1);
+        if (token === latestScrollToken) {
+          void scrollAndHighlight(text, selector, attempt + 1, token);
+        }
       }, 300);
       return;
     }

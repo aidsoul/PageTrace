@@ -536,11 +536,18 @@ function waitForTabAndScroll(tabId: number, text: string, selector: string): voi
   const cleanup = (): void => {
     if (done) return;
     done = true;
-    browser.tabs.onUpdated.removeListener(listener);
+    browser.tabs.onUpdated.removeListener(updateListener);
+    browser.tabs.onRemoved.removeListener(removeListener);
     clearTimeout(timeoutId);
   };
 
-  const listener = (updatedTabId: number, changeInfo: { status?: string }): void => {
+  const removeListener = (closedTabId: number): void => {
+    if (closedTabId === tabId) {
+      cleanup();
+    }
+  };
+
+  const updateListener = (updatedTabId: number, changeInfo: { status?: string }): void => {
     if (updatedTabId === tabId && changeInfo.status === 'complete') {
       cleanup();
       setTimeout(() => {
@@ -558,7 +565,8 @@ function waitForTabAndScroll(tabId: number, text: string, selector: string): voi
   };
 
   const timeoutId = setTimeout(cleanup, 20000);
-  browser.tabs.onUpdated.addListener(listener);
+  browser.tabs.onUpdated.addListener(updateListener);
+  browser.tabs.onRemoved.addListener(removeListener);
 }
 
 async function isIndexingPaused(): Promise<boolean> {

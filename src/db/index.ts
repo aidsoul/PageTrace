@@ -1,6 +1,6 @@
 import Dexie, { type Table } from 'dexie';
 import browser from 'webextension-polyfill';
-import type { PageRecord, TextChunk, MediaItem, CustomTagIndex, AutoTagRule } from '@/types/index';
+import type { PageRecord, TextChunk, MediaItem, CustomTagIndex, AutoTagRule, SearchDoc } from '@/types/index';
 import { getSettings } from '@/common/settings';
 import { matchUrlPattern, normalizeTagName } from '@/common/tags';
 import { normalizePageUrl, normalizeIndexedText } from '@/common/search-utils';
@@ -12,7 +12,7 @@ export interface SearchCacheRecord {
   key: string;
   revision: number;
   indexJson: string;
-  docs: any[];
+  docs: SearchDoc[];
   updatedAt: number;
 }
 
@@ -404,77 +404,93 @@ export async function addCustomIndex(item: {
   const normText = normalizeIndexedText(trimmedText);
   const normName = normalizeIndexedText(finalName);
 
-  let page =
-    (await db.pages.where('url').equals(cleanUrl).first()) ||
-    (item.url !== cleanUrl ? await db.pages.where('url').equals(item.url).first() : undefined);
+  let duplicateId: number | null = null;
+  let savedRecord: CustomTagIndex | null = null;
+  let savedPage: PageRecord | undefined;
 
-  const pageCustomCandidates = await Promise.all([
-    page?.id !== undefined ? db.custom_indexes.where('pageId').equals(page.id).toArray() : Promise.resolve([]),
-    db.custom_indexes.where('url').equals(cleanUrl).toArray(),
-  ]);
-  const seenCandidateIds = new Set<number>();
-  const candidates: CustomTagIndex[] = [];
-  for (const list of pageCustomCandidates) {
-    for (const ci of list) {
-      if (ci.id !== undefined && !seenCandidateIds.has(ci.id)) {
-        seenCandidateIds.add(ci.id);
-        candidates.push(ci);
+  await db.transaction('rw', db.pages, db.custom_indexes, async () => {
+    let page =
+      (await db.pages.where('url').equals(cleanUrl).first()) ||
+      (item.url !== cleanUrl ? await db.pages.where('url').equals(item.url).first() : undefined);
+
+    const pageCustomCandidates = await Promise.all([
+      page?.id !== undefined ? db.custom_indexes.where('pageId').equals(page.id).toArray() : Promise.resolve([]),
+      db.custom_indexes.where('url').equals(cleanUrl).toArray(),
+    ]);
+    const seenCandidateIds = new Set<number>();
+    const candidates: CustomTagIndex[] = [];
+    for (const list of pageCustomCandidates) {
+      for (const ci of list) {
+        if (ci.id !== undefined && !seenCandidateIds.has(ci.id)) {
+          seenCandidateIds.add(ci.id);
+          candidates.push(ci);
+        }
       }
     }
-  }
 
-  const duplicateIndex = candidates.find((ci) => {
-    const ciNormText = normalizeIndexedText(ci.text);
-    const ciNormName = normalizeIndexedText(ci.name);
-    return (normText && ciNormText === normText) || (normName && ciNormName === normName);
+    const duplicateIndex = candidates.find((ci) => {
+      const ciNormText = normalizeIndexedText(ci.text);
+      const ciNormName = normalizeIndexedText(ci.name);
+      return (normText && ciNormText === normText) || (normName && ciNormName === normName);
+    });
+
+    if (duplicateIndex && duplicateIndex.id !== undefined) {
+      duplicateId = duplicateIndex.id;
+      return;
+    }
+
+    let pageId: number;
+    if (!page) {
+      pageId = (await db.pages.add({
+        url: cleanUrl,
+        title: item.pageTitle || cleanUrl,
+        favicon: item.favicon || '',
+        createdAt: now,
+        lastAccessedAt: now,
+        sizeBytes: trimmedText.length * 2,
+      })) as number;
+      page = {
+        id: pageId,
+        url: cleanUrl,
+        title: item.pageTitle || cleanUrl,
+        favicon: item.favicon || '',
+        createdAt: now,
+        lastAccessedAt: now,
+        sizeBytes: trimmedText.length * 2,
+      };
+    } else {
+      pageId = page.id!;
+      await db.pages.update(pageId, { lastAccessedAt: now });
+    }
+
+    const record: CustomTagIndex = {
+      pageId,
+      url: cleanUrl,
+      pageTitle: item.pageTitle || cleanUrl,
+      favicon: item.favicon || '',
+      name: finalName,
+      text: trimmedText,
+      note: cleanNote,
+      selector: item.selector || '',
+      createdAt: now,
+    };
+
+    const id = (await db.custom_indexes.add(record)) as number;
+    record.id = id;
+    savedRecord = record;
+    savedPage = page;
   });
 
-  if (duplicateIndex && duplicateIndex.id !== undefined) {
-    return { id: duplicateIndex.id, duplicate: true };
+  if (duplicateId !== null) {
+    return { id: duplicateId, duplicate: true };
   }
-
-  let pageId: number;
-  if (!page) {
-    pageId = (await db.pages.add({
-      url: cleanUrl,
-      title: item.pageTitle || cleanUrl,
-      favicon: item.favicon || '',
-      createdAt: now,
-      lastAccessedAt: now,
-      sizeBytes: trimmedText.length * 2,
-    })) as number;
-    page = {
-      id: pageId,
-      url: cleanUrl,
-      title: item.pageTitle || cleanUrl,
-      favicon: item.favicon || '',
-      createdAt: now,
-      lastAccessedAt: now,
-      sizeBytes: trimmedText.length * 2,
-    };
-  } else {
-    pageId = page.id!;
-    await db.pages.update(pageId, { lastAccessedAt: now });
-  }
-
-  const record: CustomTagIndex = {
-    pageId,
-    url: cleanUrl,
-    pageTitle: item.pageTitle || cleanUrl,
-    favicon: item.favicon || '',
-    name: finalName,
-    text: trimmedText,
-    note: cleanNote,
-    selector: item.selector || '',
-    createdAt: now,
-  };
-
-  const id = (await db.custom_indexes.add(record)) as number;
-  record.id = id;
 
   const rev = bumpDbRevision();
-  searchSyncHooks?.onCustomIndexUpserted?.(record, page, rev);
-  return { id, duplicate: false };
+  if (savedRecord) {
+    searchSyncHooks?.onCustomIndexUpserted?.(savedRecord, savedPage, rev);
+    return { id: (savedRecord as CustomTagIndex).id!, duplicate: false };
+  }
+  return { id: -1, duplicate: false };
 }
 
 export async function deleteCustomIndex(id: number): Promise<void> {
@@ -658,17 +674,12 @@ export async function getStorageStats(): Promise<StorageStats> {
   ]);
 
   if (bytes === 0 && (pagesCount > 0 || indexesCount > 0)) {
-    const [pages, customIndexes] = await Promise.all([
-      db.pages.toArray(),
-      db.custom_indexes.toArray(),
-    ]);
-
-    for (const p of pages) {
+    await db.pages.each((p) => {
       bytes += p.sizeBytes || (((p.url?.length || 0) + (p.title?.length || 0) + (p.favicon?.length || 0)) * 2 + 64);
-    }
-    for (const ci of customIndexes) {
+    });
+    await db.custom_indexes.each((ci) => {
       bytes += ((ci.name?.length || 0) + (ci.text?.length || 0) + (ci.url?.length || 0) + (ci.pageTitle?.length || 0) + (ci.selector?.length || 0)) * 2 + 32;
-    }
+    });
   }
 
   return {
@@ -690,7 +701,7 @@ export async function saveSearchCache(snapshot: {
   version?: number;
   revision: number;
   indexJson: string;
-  docs: any[];
+  docs: SearchDoc[];
 }): Promise<void> {
   try {
     await db.search_cache.put({
@@ -709,7 +720,7 @@ export async function loadSearchCache(): Promise<{
   version: 1;
   revision: number;
   indexJson: string;
-  docs: any[];
+  docs: SearchDoc[];
 } | null> {
   try {
     const record = await db.search_cache.get('snapshot');
