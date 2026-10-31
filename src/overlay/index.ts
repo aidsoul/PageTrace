@@ -2835,4 +2835,61 @@ export function closeOverlay(): void {
   }
 }
 
+function ensureOverlayHost(): ShadowRoot {
+  let host = document.getElementById('pagetrace-overlay-host');
+  if (!host) {
+    host = document.createElement('div');
+    host.id = 'pagetrace-overlay-host';
+    host.style.cssText =
+      'all: initial; display: block; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 2147483647; pointer-events: none;';
+    document.documentElement.appendChild(host);
+  }
+  return host.shadowRoot || host.attachShadow({ mode: 'open' });
+}
+
+let overlayInitPromise: Promise<void> | null = null;
+
+async function handleOverlayToggle(targetMode?: SearchMode): Promise<void> {
+  const host = document.getElementById('pagetrace-overlay-host');
+  if (!host || !overlayInitPromise) {
+    const shadow = ensureOverlayHost();
+    overlayInitPromise = initOverlayInShadow(shadow, targetMode);
+    await overlayInitPromise;
+    const mountedHost = document.getElementById('pagetrace-overlay-host');
+    if (mountedHost) mountedHost.style.display = 'block';
+    return;
+  }
+
+  const isHiddenNow = host.style.display === 'none';
+  if (isHiddenNow) {
+    host.style.display = 'block';
+    await showOverlayInShadow(targetMode);
+  } else if (isFloatingNavVisible() && (!targetMode || targetMode === 'page')) {
+    restoreModalFromFloatingNav();
+  } else {
+    const currentMode = getCurrentSearchMode();
+    if (targetMode && targetMode !== currentMode) {
+      await showOverlayInShadow(targetMode);
+    } else {
+      closeOverlay();
+    }
+  }
+}
+
+const globalScope = window as unknown as Record<string, unknown>;
+globalScope.__pt_toggle_overlay = (mode?: SearchMode) => {
+  void handleOverlayToggle(mode);
+};
+globalScope.__pt_close_overlay = () => {
+  closeOverlay();
+};
+globalScope.__pt_is_overlay_open = () => {
+  return isOverlayOpen();
+};
+
+window.addEventListener('pt:toggle-overlay-event', ((e: CustomEvent<{ mode?: SearchMode }>) => {
+  void handleOverlayToggle(e.detail?.mode);
+}) as EventListener);
+
+
 

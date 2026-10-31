@@ -4,8 +4,17 @@ import type { PageRecord, TextChunk, MediaItem, CustomTagIndex, AutoTagRule } fr
 import { getSettings } from '@/common/settings';
 import { matchUrlPattern, normalizeTagName } from '@/common/tags';
 import { normalizePageUrl, normalizeIndexedText } from '@/common/search-utils';
+import { safeCompressText, safeDecompressText } from '@/common/compression';
 
 export { normalizePageUrl, normalizeIndexedText };
+
+export interface SearchCacheRecord {
+  key: string;
+  revision: number;
+  indexJson: string;
+  docs: any[];
+  updatedAt: number;
+}
 
 export interface DbSearchSyncHooks {
   onPageUpserted?: (
@@ -35,6 +44,7 @@ export class PageTraceDB extends Dexie {
   text_chunks!: Table<TextChunk, number>;
   media_items!: Table<MediaItem, number>;
   custom_indexes!: Table<CustomTagIndex, number>;
+  search_cache!: Table<SearchCacheRecord, string>;
 
   constructor() {
     super('PageTraceDB');
@@ -69,6 +79,10 @@ export class PageTraceDB extends Dexie {
             }
           });
       });
+
+    this.version(5).stores({
+      search_cache: 'key, updatedAt',
+    });
   }
 }
 
@@ -197,6 +211,25 @@ export async function upsertPage(
     ((url.length || 0) + (title?.length || 0) + (favicon?.length || 0)) * 2 + 64;
   const totalSizeBytes = chunksBytes + mediaBytes + metaBytes;
 
+  const compressedChunks = await Promise.all(
+    uniqueChunks.map(async (c) => {
+      const compressed = await safeCompressText(c.text);
+      if (compressed) {
+        return {
+          text: '',
+          compressedText: compressed,
+          selector: c.selector,
+          depth: c.depth,
+        };
+      }
+      return {
+        text: c.text,
+        selector: c.selector,
+        depth: c.depth,
+      };
+    }),
+  );
+
   let savedPage!: PageRecord;
   let savedChunks: TextChunk[] = [];
   let savedMedia: MediaItem[] = [];
@@ -266,9 +299,9 @@ export async function upsertPage(
     }
 
     if (uniqueChunks.length > 0) {
-      const chunkRecords = uniqueChunks.map((c) => ({ ...c, pageId, createdAt: now }));
+      const chunkRecords = compressedChunks.map((c) => ({ ...c, pageId, createdAt: now }));
       const chunkIds = (await db.text_chunks.bulkAdd(chunkRecords, { allKeys: true })) as number[];
-      savedChunks = chunkRecords.map((c, idx) => ({ ...c, id: chunkIds[idx] }));
+      savedChunks = uniqueChunks.map((c, idx) => ({ ...c, id: chunkIds[idx], pageId, createdAt: now }));
     }
 
     if (uniqueMedia.length > 0) {
@@ -314,18 +347,36 @@ export async function touchPageAccess(params: { pageId?: number; url?: string })
   }
 }
 
+export async function resolveChunkText(chunk: TextChunk): Promise<string> {
+  if (chunk.text) return chunk.text;
+  if (chunk.compressedText) {
+    const decompressed = await safeDecompressText(chunk.compressedText);
+    if (decompressed !== null) {
+      chunk.text = decompressed;
+      return decompressed;
+    }
+  }
+  return '';
+}
+
 export async function getIndexSnapshot(): Promise<{
   pages: PageRecord[];
   chunks: TextChunk[];
   media: MediaItem[];
   customIndexes: CustomTagIndex[];
 }> {
-  const [pages, chunks, media, customIndexes] = await Promise.all([
+  const [pages, rawChunks, media, customIndexes] = await Promise.all([
     db.pages.toArray(),
     db.text_chunks.toArray(),
     db.media_items.toArray(),
     db.custom_indexes.toArray(),
   ]);
+  const chunks = await Promise.all(
+    rawChunks.map(async (c) => {
+      await resolveChunkText(c);
+      return c;
+    }),
+  );
   return { pages, chunks, media, customIndexes };
 }
 
@@ -635,13 +686,60 @@ export async function getUsedStorageMb(): Promise<number> {
   return stats.mb;
 }
 
+export async function saveSearchCache(snapshot: {
+  version?: number;
+  revision: number;
+  indexJson: string;
+  docs: any[];
+}): Promise<void> {
+  try {
+    await db.search_cache.put({
+      key: 'snapshot',
+      revision: snapshot.revision,
+      indexJson: snapshot.indexJson,
+      docs: snapshot.docs,
+      updatedAt: Date.now(),
+    });
+  } catch (err) {
+    console.warn('[PageTraceDB] Error saving search cache to IndexedDB:', err);
+  }
+}
+
+export async function loadSearchCache(): Promise<{
+  version: 1;
+  revision: number;
+  indexJson: string;
+  docs: any[];
+} | null> {
+  try {
+    const record = await db.search_cache.get('snapshot');
+    if (!record) return null;
+    return {
+      version: 1,
+      revision: record.revision,
+      indexJson: record.indexJson,
+      docs: record.docs,
+    };
+  } catch (err) {
+    console.warn('[PageTraceDB] Error loading search cache from IndexedDB:', err);
+    return null;
+  }
+}
+
+export async function clearSearchCache(): Promise<void> {
+  try {
+    await db.search_cache.clear();
+  } catch {}
+}
+
 // Clear entire database
 export async function clearDatabase(): Promise<void> {
-  await db.transaction('rw', db.pages, db.text_chunks, db.media_items, db.custom_indexes, async () => {
+  await db.transaction('rw', db.pages, db.text_chunks, db.media_items, db.custom_indexes, db.search_cache, async () => {
     await db.text_chunks.clear();
     await db.media_items.clear();
     await db.custom_indexes.clear();
     await db.pages.clear();
+    await db.search_cache.clear();
   });
   const rev = bumpDbRevision();
   searchSyncHooks?.onDatabaseCleared?.(rev);

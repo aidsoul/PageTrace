@@ -3,7 +3,6 @@ import type { IndexDepth, IndexPageMessage, MediaItem, SiteTagRule, TextChunk, U
 import { getLocale, DEFAULT_LANGUAGE } from '@/i18n/index';
 import { setSafeHtml, matchUrlPattern } from '@/common/tags';
 import { getSettings, matchesHotkey } from '@/common/settings';
-import { initOverlayInShadow, showOverlayInShadow, closeOverlay, getCurrentSearchMode, isOverlayOpen, isFloatingNavVisible, restoreModalFromFloatingNav } from '@/overlay/index';
 
 // Content script: DOM parser, indexer, and in-page UI
 
@@ -129,10 +128,14 @@ window.addEventListener(
     if (!cachedEnabled) return;
     const host = document.getElementById('pagetrace-overlay-host');
     const isInsideOverlay = Boolean(host && e.composedPath().includes(host));
-    if (e.key === 'Escape' && isOverlayOpen() && !isInsideOverlay) {
+    const isOverlayOpen = Boolean(host && host.style.display !== 'none');
+    if (e.key === 'Escape' && isOverlayOpen && !isInsideOverlay) {
       e.preventDefault();
       e.stopPropagation();
-      closeOverlay();
+      const closeFn = (window as unknown as Record<string, unknown>).__pt_close_overlay as
+        | (() => void)
+        | undefined;
+      closeFn?.();
       return;
     }
     if (!e.altKey && !e.ctrlKey && !e.metaKey && isEditableEventTarget(e.target)) {
@@ -167,7 +170,16 @@ function scheduleParseIfChanged(): void {
 
 const observer = new MutationObserver((mutations) => {
   for (let i = 0; i < mutations.length; i++) {
-    pendingAddedNodes += mutations[i]!.addedNodes.length;
+    const m = mutations[i]!;
+    for (let j = 0; j < m.addedNodes.length; j++) {
+      const node = m.addedNodes[j]!;
+      if (node.nodeType === Node.ELEMENT_NODE) {
+        const tag = (node as Element).tagName;
+        if (tag !== 'SCRIPT' && tag !== 'STYLE' && tag !== 'SVG' && tag !== 'NOSCRIPT') {
+          pendingAddedNodes++;
+        }
+      }
+    }
   }
   const now = Date.now();
   if (now - mutationLastRun < THROTTLE_MS) {
@@ -308,6 +320,14 @@ const noiseCheckCache = new WeakMap<Element, boolean>();
 function isBoilerplateOrNoise(el: Element): boolean {
   const cached = noiseCheckCache.get(el);
   if (cached !== undefined) return cached;
+
+  if (el.parentElement) {
+    const parentNoise = noiseCheckCache.get(el.parentElement);
+    if (parentNoise === true) {
+      noiseCheckCache.set(el, true);
+      return true;
+    }
+  }
 
   const noiseContainer = el.closest(
     'header, footer, nav, aside, dialog, [role="navigation"], [role="banner"], [role="contentinfo"], [role="dialog"], [aria-modal="true"]',
@@ -886,7 +906,6 @@ function showToast(message: string): void {
 }
 
 // Overlay toggle in Shadow DOM
-let overlayLoaded = false;
 let lastToggleTime = 0;
 
 function toggleOverlay(targetMode?: 'global' | 'page'): void {
@@ -896,64 +915,64 @@ function toggleOverlay(targetMode?: 'global' | 'page'): void {
   }
   lastToggleTime = now;
 
-  const host = document.getElementById('pagetrace-overlay-host');
-  if (!overlayLoaded || !host) {
-    injectOverlay(targetMode);
+  const toggleFn = (window as unknown as Record<string, unknown>).__pt_toggle_overlay as
+    | ((mode?: 'global' | 'page') => void)
+    | undefined;
+
+  if (typeof toggleFn === 'function') {
+    toggleFn(targetMode);
     return;
   }
 
-  const isHiddenNow = host.style.display === 'none';
-  if (isHiddenNow) {
-    host.style.display = 'block';
-    void showOverlayInShadow(targetMode);
-  } else if (isFloatingNavVisible() && (!targetMode || targetMode === 'page')) {
-    restoreModalFromFloatingNav();
-  } else {
-    const currentMode = getCurrentSearchMode();
-    if (targetMode && targetMode !== currentMode) {
-      void showOverlayInShadow(targetMode);
-    } else {
-      closeOverlay();
-    }
-  }
-}
-
-function injectOverlay(targetMode?: 'global' | 'page'): void {
-  overlayLoaded = true;
-
-  const existingHost = document.getElementById('pagetrace-overlay-host');
-  if (existingHost) {
-    existingHost.remove();
-  }
-
-  const host = document.createElement('div');
-  host.id = 'pagetrace-overlay-host';
-  host.style.cssText = 'all: initial; display: block; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 2147483647; pointer-events: none;';
-  document.documentElement.appendChild(host);
-
-  const shadow = host.attachShadow({ mode: 'open' });
   ensureHighlightStyles();
-  void initOverlayInShadow(shadow, targetMode);
+  browser.runtime
+    .sendMessage({ type: 'ENSURE_OVERLAY_INJECTED' })
+    .then(() => {
+      const fn = (window as unknown as Record<string, unknown>).__pt_toggle_overlay as
+        | ((mode?: 'global' | 'page') => void)
+        | undefined;
+      if (typeof fn === 'function') {
+        fn(targetMode);
+      }
+    })
+    .catch((err) => {
+      console.warn('[PageTrace] Failed to load overlay bundle:', err);
+    });
 }
 
 // DOM utility helpers
+const hiddenCheckCache = new WeakMap<Element, boolean>();
+
 function isHidden(el: Element): boolean {
   if ((el as HTMLElement).hidden === true || el.getAttribute('aria-hidden') === 'true') {
     return true;
   }
-  // Fast native C++ visibility check supported in modern Chrome & Firefox
+  const cached = hiddenCheckCache.get(el);
+  if (cached !== undefined) return cached;
+
+  if (el.parentElement) {
+    const parentHidden = hiddenCheckCache.get(el.parentElement);
+    if (parentHidden === true) {
+      hiddenCheckCache.set(el, true);
+      return true;
+    }
+  }
+
+  let hidden = false;
   if ('checkVisibility' in el && typeof (el as HTMLElement).checkVisibility === 'function') {
-    return !(el as HTMLElement).checkVisibility({
+    hidden = !(el as HTMLElement).checkVisibility({
       checkOpacity: true,
       checkVisibilityCSS: true,
     });
+  } else {
+    const style = getComputedStyle(el);
+    hidden =
+      style.display === 'none' ||
+      style.visibility === 'hidden' ||
+      style.opacity === '0';
   }
-  const style = getComputedStyle(el);
-  return (
-    style.display === 'none' ||
-    style.visibility === 'hidden' ||
-    style.opacity === '0'
-  );
+  hiddenCheckCache.set(el, hidden);
+  return hidden;
 }
 
 function isInteractive(el: Element): boolean {

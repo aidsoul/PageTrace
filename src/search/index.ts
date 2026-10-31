@@ -550,9 +550,6 @@ export function serializeSearchIndex(revision = indexedRevision): SerializedSear
   if (!searchIndex) return null;
   try {
     const json = JSON.stringify(searchIndex.toJSON());
-    if (json.length > 2.5 * 1024 * 1024) {
-      return null;
-    }
     return {
       version: 1,
       revision,

@@ -32,8 +32,10 @@ export interface PageRecord {
 export interface TextChunk {
   id?: number;
   pageId: number;
-  /** Raw text content */
+  /** Raw text content (or decompressed on read) */
   text: string;
+  /** Optional compressed text content stored in IndexedDB */
+  compressedText?: Uint8Array;
   /** 0-based DOM node path / selector hint */
   selector: string;
   /** Heading level: 1–6 for h1–h6, 0 for body text */
@@ -287,6 +289,11 @@ export interface GetSearchSuggestionsMessage {
   type: 'GET_SEARCH_SUGGESTIONS';
 }
 
+/** Message from content script to ensure overlay bundle is injected */
+export interface EnsureOverlayInjectedMessage {
+  type: 'ENSURE_OVERLAY_INJECTED';
+}
+
 export type ExtensionMessage =
   | IndexPageMessage
   | ToggleOverlayMessage
@@ -302,7 +309,8 @@ export type ExtensionMessage =
   | TouchPageMessage
   | ExecuteSearchQueryMessage
   | DeletePageMessage
-  | GetSearchSuggestionsMessage;
+  | GetSearchSuggestionsMessage
+  | EnsureOverlayInjectedMessage;
 
 /** Content type filter for search results */
 export type SearchTypeFilter = 'all' | 'text' | 'tag' | 'media';

@@ -14,10 +14,11 @@ PageTrace targets both **Firefox MV3** and **Chrome MV3** from a shared TypeScri
 
 Defined in [build.mjs](file:///d:/Projects/PageTrace/build.mjs):
 - `background` (`src/background/index.ts`) — bundled as ES module (`format: 'es'`)
-- `content` (`src/content/index.ts`) — bundled as IIFE (`PT_content`), with in-page search overlay (`src/overlay/index.ts`) inlined directly
+- `content` (`src/content/index.ts`) — lightweight content script bundled as IIFE (`PT_content`), handling DOM extraction and shortcut interception
+- `overlay` (`src/overlay/index.ts`) — in-page Shadow DOM search overlay bundled as IIFE (`PT_overlay`), dynamically injected on demand via `browser.scripting.executeScript`
 - `options` (`src/options/index.ts`) — bundled as IIFE (`PT_options`)
 - `popup` (`src/popup/index.ts`) — bundled as IIFE (`PT_popup`)
-- `search` (`src/search-window/index.ts`) — bundled as IIFE (`PT_search`)
+- `search` (`src/search-window/index.ts`) — full-window search UI bundled as IIFE (`PT_search`), queries background search worker without duplicating index memory
 
 All dynamic imports are inlined (`inlineDynamicImports: true`), and `__BROWSER__` is replaced at build time with `"firefox"` or `"chrome"`. Common modules are structured in `src/common/` ([search-utils.ts](file:///d:/Projects/PageTrace/src/common/search-utils.ts), [settings.ts](file:///d:/Projects/PageTrace/src/common/settings.ts), [tags.ts](file:///d:/Projects/PageTrace/src/common/tags.ts)).
 

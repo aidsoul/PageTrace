@@ -12,6 +12,9 @@ import {
   touchPageAccess,
   getIndexSnapshot,
   getLocalDbRevision,
+  loadSearchCache,
+  saveSearchCache,
+  clearSearchCache,
 } from '@/db/index';
 import {
   rebuildIndex,
@@ -45,7 +48,6 @@ import { getLocale, DEFAULT_LANGUAGE } from '@/i18n/index';
 
 // Background service worker
 
-const SEARCH_CACHE_STORAGE_KEY = 'pt_search_cache';
 let indexRebuildPromise: Promise<void> | null = null;
 let cachePersistTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -55,17 +57,11 @@ function scheduleSearchCachePersist(): void {
     cachePersistTimer = null;
     const snapshot = serializeSearchIndex(getLocalDbRevision());
     if (!snapshot) {
-      browser.storage.local.remove(SEARCH_CACHE_STORAGE_KEY).catch(() => {});
+      void clearSearchCache();
       return;
     }
-    try {
-      browser.storage.local.set({ [SEARCH_CACHE_STORAGE_KEY]: snapshot }).catch(() => {
-        browser.storage.local.remove(SEARCH_CACHE_STORAGE_KEY).catch(() => {});
-      });
-    } catch {
-      browser.storage.local.remove(SEARCH_CACHE_STORAGE_KEY).catch(() => {});
-    }
-  }, 1200);
+    void saveSearchCache(snapshot);
+  }, 800);
 }
 
 async function ensureBackgroundSearchIndex(): Promise<void> {
@@ -81,10 +77,8 @@ async function ensureBackgroundSearchIndex(): Promise<void> {
     try {
       if (!isIndexInitialized()) {
         try {
-          const stored = await browser.storage.local.get(['pt_db_rev', SEARCH_CACHE_STORAGE_KEY]);
-          const storedRev = Number(stored?.['pt_db_rev']) || currentRev;
-          const cached = stored?.[SEARCH_CACHE_STORAGE_KEY] as { revision?: number } | undefined;
-          if (cached && cached.revision === storedRev && hydrateSearchIndex(cached)) {
+          const cached = await loadSearchCache();
+          if (cached && cached.revision === currentRev && hydrateSearchIndex(cached)) {
             return;
           }
         } catch {
@@ -434,6 +428,23 @@ browser.runtime.onMessage.addListener(
       })().catch((e) => {
         console.error('[PageTrace] Delete page error:', e);
       });
+    }
+
+    if (message.type === 'ENSURE_OVERLAY_INJECTED') {
+      const tabId = sender.tab?.id;
+      if (tabId) {
+        return browser.scripting
+          .executeScript({
+            target: { tabId },
+            files: ['overlay.js'],
+          })
+          .then(() => ({ success: true }))
+          .catch((err) => {
+            console.error('[PageTrace] Error injecting overlay.js:', err);
+            return { success: false, error: String(err) };
+          });
+      }
+      return Promise.resolve({ success: false, error: 'No sender tab' });
     }
 
     if (message.type === 'GET_SEARCH_SUGGESTIONS') {

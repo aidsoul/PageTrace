@@ -1,20 +1,11 @@
 import browser from 'webextension-polyfill';
-import { db, deletePageById } from '@/db/index';
-import {
-  rebuildIndex,
-  search,
-  parseSearchQuery,
-  sortSearchResults,
-  hydrateSearchIndex,
-  serializeSearchIndex,
-  getAvailableTags,
-  getAvailableDomains,
-} from '@/search/index';
 import type { SearchResult, SearchTypeFilter, SearchSortOption, SearchFilterOptions, TagCatalogItem } from '@/types/index';
 import { getSettings, saveSettings } from '@/common/settings';
 import { getLocale, applyI18nToDOM, DEFAULT_LANGUAGE } from '@/i18n/index';
 import { renderTagBadge, formatTimeAgo, normalizeTagName, escapeHtml, escapeAttr, setSafeHtml, matchUrlPattern } from '@/common/tags';
 import {
+  parseSearchQuery,
+  sortSearchResults,
   toggleInlineOperatorToken,
   groupResultsByPage,
   formatMarkdownQuote,
@@ -29,6 +20,8 @@ import {
 
 let currentLang = DEFAULT_LANGUAGE;
 let tagCatalog: TagCatalogItem[] = [];
+let availableTags: string[] = [];
+let availableDomains: string[] = [];
 let pinnedDomains: string[] = [];
 let searchMaxResults = 100;
 let searchPageSize = 20;
@@ -109,7 +102,7 @@ async function init(): Promise<void> {
     const cursorPos = searchInput.selectionStart ?? query.length;
     currentTokenInfo = getAutocompleteTokenInfo(query, cursorPos);
     if (currentTokenInfo && (currentTokenInfo.prefix || currentTokenInfo.filter.length >= 1)) {
-      autocompleteItems = generateSearchSuggestions(currentTokenInfo, getAvailableTags(), getAvailableDomains());
+      autocompleteItems = generateSearchSuggestions(currentTokenInfo, availableTags, availableDomains);
       if (autocompleteItems.length > 0) {
         renderAutocomplete(autocompleteItems);
       } else {
@@ -316,57 +309,43 @@ function setActiveTypeFilter(type: SearchTypeFilter): void {
 async function loadIndex(force = false): Promise<void> {
   try {
     let currentRev = 0;
-    let cachedSnapshot: { revision?: number } | undefined;
     try {
-      const stored = await browser.storage.local.get(['pt_db_rev', 'pt_search_cache']);
+      const stored = await browser.storage.local.get('pt_db_rev');
       currentRev = Number(stored?.['pt_db_rev']) || 0;
-      cachedSnapshot = stored?.['pt_search_cache'] as { revision?: number } | undefined;
     } catch {}
 
     if (!force && isIndexReady && currentRev > 0 && currentRev === loadedDbRevision) {
       return;
     }
 
-    if (
-      !force &&
-      currentRev > 0 &&
-      cachedSnapshot &&
-      cachedSnapshot.revision === currentRev &&
-      hydrateSearchIndex(cachedSnapshot)
-    ) {
-      loadedDbRevision = currentRev;
-      isIndexReady = true;
-    } else {
-      const [pages, chunks, media, customIndexes] = await Promise.all([
-        db.pages.toArray(),
-        db.text_chunks.toArray(),
-        db.media_items.toArray(),
-        db.custom_indexes.toArray(),
-      ]);
-      const rev = currentRev || Date.now();
-      await rebuildIndex(pages, chunks, media, customIndexes, rev);
-      loadedDbRevision = rev;
-      isIndexReady = true;
+    const suggestions = (await browser.runtime.sendMessage({
+      type: 'GET_SEARCH_SUGGESTIONS',
+    })) as { tags?: TagCatalogItem[]; domains?: string[] } | undefined;
 
-      const serialized = serializeSearchIndex(rev);
-      if (serialized) {
-        try {
-          browser.storage.local.set({ pt_search_cache: serialized }).catch(() => {
-            browser.storage.local.remove('pt_search_cache').catch(() => {});
-          });
-        } catch {
-          browser.storage.local.remove('pt_search_cache').catch(() => {});
-        }
-      } else {
-        browser.storage.local.remove('pt_search_cache').catch(() => {});
+    if (suggestions) {
+      if (suggestions.tags) {
+        tagCatalog = suggestions.tags;
+        availableTags = suggestions.tags.map((t) => t.name);
+      }
+      if (suggestions.domains) {
+        availableDomains = suggestions.domains;
       }
     }
 
-    if (searchInput.value.trim() || activeTypeFilter !== 'all' || activeSort !== 'relevance' || activePeriod !== 'all') {
-      performSearch(searchInput.value);
+    loadedDbRevision = currentRev;
+    isIndexReady = true;
+
+    if (
+      searchInput.value.trim() ||
+      activeTypeFilter !== 'all' ||
+      activeSort !== 'relevance' ||
+      activePeriod !== 'all' ||
+      activeVisits !== 'all'
+    ) {
+      void performSearch(searchInput.value);
     }
   } catch (err) {
-    console.error('[PageTrace Search] Error loading index:', err);
+    console.error('[PageTrace Search] Error loading suggestions:', err);
   }
 }
 
@@ -392,7 +371,9 @@ function getEffectiveSort(query: string): SearchSortOption {
   return parseSearchQuery(query).sort || 'relevance';
 }
 
-function performSearch(query: string): void {
+let searchRequestId = 0;
+
+async function performSearch(query: string): Promise<void> {
   const trimmed = query.trim();
   const t = getLocale(currentLang);
 
@@ -414,12 +395,7 @@ function performSearch(query: string): void {
     return;
   }
 
-  if (!isIndexReady) {
-    renderEmpty(t.search.loading);
-    updateFooter(0);
-    return;
-  }
-
+  const reqId = ++searchRequestId;
   const dateRange = getDateRangeFromPeriod(activePeriod);
   const visitsRange = getVisitsRangeFromFilter(activeVisits);
   const filterOptions: SearchFilterOptions = {
@@ -431,17 +407,30 @@ function performSearch(query: string): void {
     ...(visitsRange.maxVisits !== undefined ? { maxVisits: visitsRange.maxVisits } : {}),
   };
 
-  allMatchedResults = search(trimmed, searchMaxResults, filterOptions);
+  try {
+    const results = (await browser.runtime.sendMessage({
+      type: 'EXECUTE_SEARCH_QUERY',
+      query: trimmed,
+      limit: searchMaxResults,
+      filterOptions,
+    })) as SearchResult[] | undefined;
 
-  const parsed = parseSearchQuery(trimmed);
-  const hasQueryOrFilter =
-    Boolean(trimmed) ||
-    activeTypeFilter !== 'all' ||
-    activeSort !== 'relevance' ||
-    activePeriod !== 'all' ||
-    activeVisits !== 'all';
-  updateTabCounts(hasQueryOrFilter, parsed.type);
-  applyTypeFilterAndRender();
+    if (reqId !== searchRequestId) return;
+
+    allMatchedResults = results || [];
+
+    const parsed = parseSearchQuery(trimmed);
+    const hasQueryOrFilter =
+      Boolean(trimmed) ||
+      activeTypeFilter !== 'all' ||
+      activeSort !== 'relevance' ||
+      activePeriod !== 'all' ||
+      activeVisits !== 'all';
+    updateTabCounts(hasQueryOrFilter, parsed.type);
+    applyTypeFilterAndRender();
+  } catch (err) {
+    console.error('[PageTrace Search] Search query execution failed:', err);
+  }
 }
 
 function updateTabCounts(visible: boolean, inlineTypeOverride?: SearchTypeFilter): void {
@@ -699,7 +688,11 @@ function createResultCard(group: GroupedSearchResult, idx: number): HTMLElement 
   delBtn?.addEventListener('click', async (e) => {
     e.stopPropagation();
     if (window.confirm(t.search.actionDeleteConfirm)) {
-      await deletePageById(result.pageId);
+      await browser.runtime.sendMessage({
+        type: 'DELETE_PAGE',
+        pageId: result.pageId,
+        url: result.url,
+      });
       allMatchedResults = allMatchedResults.filter((item) => item.pageId !== result.pageId && item.url !== result.url);
       applyTypeFilterAndRender();
     }
