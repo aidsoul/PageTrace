@@ -473,10 +473,23 @@ async function handleNavigateToResult(msg: NavigateToResultMessage): Promise<voi
 
   // Check if a tab with this URL is already open
   try {
-    const tabs = await browser.tabs.query({});
-    const existingTab = tabs.find(
-      (t) => t.id && t.url && normalizePageUrl(t.url) === targetNormalized,
-    );
+    let existingTab: browser.Tabs.Tab | undefined;
+    try {
+      const parsedUrl = new URL(url);
+      if (parsedUrl.protocol === 'http:' || parsedUrl.protocol === 'https:') {
+        const candidateTabs = await browser.tabs.query({ url: `${parsedUrl.origin}/*` });
+        existingTab = candidateTabs.find(
+          (t) => t.id && t.url && normalizePageUrl(t.url) === targetNormalized,
+        );
+      }
+    } catch {}
+
+    if (!existingTab) {
+      const tabs = await browser.tabs.query({});
+      existingTab = tabs.find(
+        (t) => t.id && t.url && normalizePageUrl(t.url) === targetNormalized,
+      );
+    }
 
     if (existingTab?.id) {
       if (existingTab.windowId !== undefined) {
@@ -607,6 +620,7 @@ async function handleIndexPage(msg: IndexPageMessage): Promise<void> {
     msg.favicon,
     msg.chunks,
     settings.indexMedia ? msg.media : [],
+    settings.autoTagRules,
   );
   scheduleSearchCachePersist();
 }

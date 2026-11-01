@@ -153,15 +153,16 @@ export async function upsertPage(
   favicon: string,
   chunks: Omit<TextChunk, 'id' | 'pageId' | 'createdAt'>[],
   media: Omit<MediaItem, 'id' | 'pageId' | 'createdAt'>[],
+  autoTagRules?: AutoTagRule[],
 ): Promise<void> {
   const now = Date.now();
   const url = normalizePageUrl(rawUrl);
 
   const autoTags: string[] = [];
   try {
-    const s = await getSettings();
-    if (s.autoTagRules && s.autoTagRules.length > 0) {
-      for (const rule of s.autoTagRules) {
+    const rules = autoTagRules !== undefined ? autoTagRules : (await getSettings()).autoTagRules;
+    if (rules && rules.length > 0) {
+      for (const rule of rules) {
         if (matchUrlPattern(rule.pattern, url)) {
           const norm = normalizeTagName(rule.tag);
           if (norm && !autoTags.includes(norm)) {
@@ -211,24 +212,36 @@ export async function upsertPage(
     ((url.length || 0) + (title?.length || 0) + (favicon?.length || 0)) * 2 + 64;
   const totalSizeBytes = chunksBytes + mediaBytes + metaBytes;
 
-  const compressedChunks = await Promise.all(
-    uniqueChunks.map(async (c) => {
-      const compressed = await safeCompressText(c.text);
-      if (compressed) {
+  const compressedChunks: Array<{
+    text: string;
+    compressedText?: Uint8Array;
+    selector: string;
+    depth: number;
+  }> = [];
+
+  const COMPRESS_BATCH_SIZE = 25;
+  for (let i = 0; i < uniqueChunks.length; i += COMPRESS_BATCH_SIZE) {
+    const batch = uniqueChunks.slice(i, i + COMPRESS_BATCH_SIZE);
+    const batchProcessed = await Promise.all(
+      batch.map(async (c) => {
+        const compressed = await safeCompressText(c.text);
+        if (compressed) {
+          return {
+            text: '',
+            compressedText: compressed,
+            selector: c.selector || '',
+            depth: c.depth ?? 0,
+          };
+        }
         return {
-          text: '',
-          compressedText: compressed,
-          selector: c.selector,
-          depth: c.depth,
+          text: c.text,
+          selector: c.selector || '',
+          depth: c.depth ?? 0,
         };
-      }
-      return {
-        text: c.text,
-        selector: c.selector,
-        depth: c.depth,
-      };
-    }),
-  );
+      }),
+    );
+    compressedChunks.push(...batchProcessed);
+  }
 
   let savedPage!: PageRecord;
   let savedChunks: TextChunk[] = [];
@@ -600,6 +613,9 @@ export async function cleanupExpired(ttlDays: number, pinnedDomains?: string[]):
 // Remove oldest unpinned pages if total size exceeds maxSizeMb
 export async function evictLRU(maxSizeMb: number, pinnedDomains?: string[]): Promise<void> {
   const maxBytes = maxSizeMb * 1024 * 1024;
+  const pageCount = await db.pages.count();
+  if (pageCount === 0) return;
+
   let total = 0;
   await db.pages.each((p) => {
     total += p.sizeBytes ?? 0;
@@ -704,6 +720,11 @@ export async function saveSearchCache(snapshot: {
   docs: SearchDoc[];
 }): Promise<void> {
   try {
+    const MAX_INDEX_CACHE_BYTES = 20 * 1024 * 1024;
+    if (snapshot.indexJson.length > MAX_INDEX_CACHE_BYTES) {
+      await db.search_cache.clear();
+      return;
+    }
     await db.search_cache.put({
       key: 'snapshot',
       revision: snapshot.revision,

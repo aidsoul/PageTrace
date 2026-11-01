@@ -14,8 +14,10 @@ export async function decompressText(data: Uint8Array): Promise<string> {
   return await new Response(stream).text();
 }
 
+export const MIN_COMPRESSION_LENGTH = 150;
+
 export async function safeCompressText(text: string): Promise<Uint8Array | null> {
-  if (!isCompressionSupported || text.length < 80) return null;
+  if (!isCompressionSupported || text.length < MIN_COMPRESSION_LENGTH) return null;
   try {
     return await compressText(text);
   } catch {

@@ -162,6 +162,10 @@ function scheduleParseIfChanged(): void {
   const currentUrl = normalizeContentUrl(location.href);
   const isNewUrl = currentUrl !== lastParsedUrl;
 
+  if (isNewUrl) {
+    resetDomCaches();
+  }
+
   if (hasIndexed && !isNewUrl && pendingAddedNodes < 15) {
     return;
   }
@@ -316,7 +320,13 @@ function extractPageMeta(): Omit<TextChunk, 'id' | 'pageId' | 'createdAt'>[] {
 }
 
 const NOISE_CLASS_ID_REGEX = /cookie|consent|banner-ad|advertisement|sidebar-menu|popup-modal|popup-overlay/i;
-const noiseCheckCache = new WeakMap<Element, boolean>();
+let noiseCheckCache = new WeakMap<Element, boolean>();
+let hiddenCheckCache = new WeakMap<Element, boolean>();
+
+function resetDomCaches(): void {
+  noiseCheckCache = new WeakMap<Element, boolean>();
+  hiddenCheckCache = new WeakMap<Element, boolean>();
+}
 
 function isBoilerplateOrNoise(el: Element): boolean {
   const cached = noiseCheckCache.get(el);
@@ -729,39 +739,55 @@ function findTargetElement(text: string, selector: string): HTMLElement | null {
 
   if (needles.length === 0) return null;
 
-  // Search text nodes with TreeWalker with whitespace normalization
-  for (const needle of needles) {
-    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-    let node: Text | null;
-    while ((node = walker.nextNode() as Text | null)) {
-      const parent = node.parentElement;
-      if (!parent || isScriptLike(parent) || isHidden(parent)) continue;
-      if (normalizeSearchText(node.textContent ?? '').includes(needle)) {
-        return parent;
+  // Single-pass TreeWalker matching from longest needle to shortest
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  let node: Text | null;
+  let fallbackMatchByNeedle: HTMLElement | null = null;
+  let bestMatchedNeedleIdx = needles.length;
+
+  while ((node = walker.nextNode() as Text | null)) {
+    const parent = node.parentElement;
+    if (!parent || isScriptLike(parent) || isHidden(parent)) continue;
+    const nodeText = normalizeSearchText(node.textContent ?? '');
+    if (!nodeText) continue;
+
+    for (let i = 0; i < bestMatchedNeedleIdx; i++) {
+      if (nodeText.includes(needles[i]!)) {
+        bestMatchedNeedleIdx = i;
+        fallbackMatchByNeedle = parent;
+        if (i === 0) return parent;
+        break;
       }
     }
   }
 
-  // Fallback: search block and inline elements whose normalized textContent matches
-  for (const needle of needles) {
-    let bestMatch: HTMLElement | null = null;
-    let bestLen = Infinity;
+  if (fallbackMatchByNeedle) return fallbackMatchByNeedle;
 
-    const elements = document.body.querySelectorAll<HTMLElement>(
-      'h1, h2, h3, h4, h5, h6, p, li, blockquote, td, th, pre, code, dd, dt, summary, article, section, div, span, a',
-    );
-    for (let i = 0; i < elements.length; i++) {
-      const el = elements[i]!;
-      if (isScriptLike(el) || isHidden(el)) continue;
-      const elNorm = normalizeSearchText(el.textContent ?? '');
-      if (elNorm.includes(needle) && elNorm.length < bestLen) {
-        bestMatch = el;
-        bestLen = elNorm.length;
+  // Single-pass fallback: check candidate block/inline elements
+  const elements = document.body.querySelectorAll<HTMLElement>(
+    'h1, h2, h3, h4, h5, h6, p, li, blockquote, td, th, pre, code, dd, dt, summary, article, section, div, span, a',
+  );
+  let bestMatch: HTMLElement | null = null;
+  let bestLen = Infinity;
+
+  for (let i = 0; i < elements.length; i++) {
+    const el = elements[i]!;
+    if (isScriptLike(el) || isHidden(el)) continue;
+    const elNorm = normalizeSearchText(el.textContent ?? '');
+    if (!elNorm) continue;
+
+    for (const needle of needles) {
+      if (elNorm.includes(needle)) {
+        if (elNorm.length < bestLen) {
+          bestMatch = el;
+          bestLen = elNorm.length;
+        }
+        break;
       }
     }
-
-    if (bestMatch) return bestMatch;
   }
+
+  if (bestMatch) return bestMatch;
 
   // For meta description matches, scroll to top h1 or body
   if (selector && selector.startsWith('meta[')) {
@@ -953,8 +979,6 @@ function toggleOverlay(targetMode?: 'global' | 'page'): void {
 }
 
 // DOM utility helpers
-const hiddenCheckCache = new WeakMap<Element, boolean>();
-
 function isHidden(el: Element): boolean {
   if ((el as HTMLElement).hidden === true || el.getAttribute('aria-hidden') === 'true') {
     return true;
