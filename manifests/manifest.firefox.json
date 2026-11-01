@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "PageTrace",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "Full-text indexing and search of visited pages. 100% local, no cloud.",
   "author": "AidSoul <work-aidsoul@outlook.com>",
 
@@ -20,7 +20,16 @@
     "alarms",
     "tabs",
     "activeTab",
-    "contextMenus"
+    "contextMenus",
+    "unlimitedStorage",
+    "scripting"
+  ],
+
+  "web_accessible_resources": [
+    {
+      "resources": ["overlay.js"],
+      "matches": ["<all_urls>"]
+    }
   ],
 
   "host_permissions": [
@@ -48,6 +57,13 @@
         "mac": "Command+Shift+F"
       },
       "description": "Open PageTrace search overlay"
+    },
+    "toggle-live-search": {
+      "suggested_key": {
+        "default": "Alt+Shift+L",
+        "mac": "Command+Shift+L"
+      },
+      "description": "Open PageTrace in-page search"
     }
   },
 
@@ -66,13 +82,6 @@
     "page": "options.html",
     "open_in_tab": true
   },
-
-  "web_accessible_resources": [
-    {
-      "resources": ["overlay.js", "assets/*"],
-      "matches": ["<all_urls>"]
-    }
-  ],
 
   "icons": {
     "16": "icons/icon16.svg",

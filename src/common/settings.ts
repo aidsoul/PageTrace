@@ -71,10 +71,10 @@ export function formatHotkeyEvent(e: KeyboardEvent): string | null {
   }
 
   const parts: string[] = [];
+  if (e.metaKey) parts.push('Command');
   if (e.ctrlKey) parts.push('Ctrl');
   if (e.altKey) parts.push('Alt');
   if (e.shiftKey) parts.push('Shift');
-  if (e.metaKey) parts.push('Command');
 
   const isFunctionKey = /^F([1-9]|1[0-2])$/i.test(e.code || e.key);
   if (parts.length === 0 && !isFunctionKey) {
@@ -108,14 +108,24 @@ export function matchesHotkey(e: KeyboardEvent, targetHotkey: string): boolean {
   const formatted = formatHotkeyEvent(e);
   if (!formatted) return false;
 
-  const normTarget = targetHotkey.trim().toLowerCase();
-  if (formatted.toLowerCase() === normTarget) {
+  const normalizeCombo = (s: string): string =>
+    s
+      .toLowerCase()
+      .split('+')
+      .map((p) => p.trim())
+      .filter(Boolean)
+      .sort()
+      .join('+');
+
+  const normTarget = normalizeCombo(targetHotkey);
+  const normFormatted = normalizeCombo(formatted);
+  if (normFormatted === normTarget) {
     return true;
   }
 
   // Fallback for macOS where Command might have been stored as Ctrl
   if (e.metaKey && !e.ctrlKey) {
-    const asCtrl = formatted.replace(/\bCommand\b/i, 'Ctrl').toLowerCase();
+    const asCtrl = normalizeCombo(formatted.replace(/\bCommand\b/i, 'Ctrl'));
     if (asCtrl === normTarget) {
       return true;
     }
@@ -128,7 +138,7 @@ export function matchesHotkey(e: KeyboardEvent, targetHotkey: string): boolean {
     if (e.altKey) legacyParts.push('alt');
     if (e.shiftKey) legacyParts.push('shift');
     legacyParts.push(e.key.toLowerCase());
-    if (legacyParts.join('+') === normTarget) {
+    if (legacyParts.sort().join('+') === normTarget) {
       return true;
     }
   }

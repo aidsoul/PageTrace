@@ -1,4 +1,4 @@
-# PageTrace 🔍
+# PageTrace
 
 > **Full-text indexing and search for visited web pages — 100% local, zero cloud.**
 
@@ -8,25 +8,25 @@ PageTrace is a browser extension that silently indexes every page you visit and 
 
 ## Features
 
-- 📖 **3-level DOM indexing** — headings only, semantic (articles/paragraphs), or full DOM. Non-blocking execution via `requestIdleCallback` with debounced SPA / `MutationObserver` handling.
-- ⚡ **Instant fuzzy search** — in-memory MiniSearch with Latin & Cyrillic tokenization, field boosting (`tagName: 10x`, `title: 2x`, `note: 1.5x`), completing queries in ≤100ms across 50,000+ fragments.
-- 🔎 **Rich search operators** — inline query syntax with both English and Russian aliases:
+- **3-level DOM indexing** — headings only, semantic (articles/paragraphs), or full DOM. Non-blocking execution via `requestIdleCallback` with debounced SPA / `MutationObserver` handling.
+- **Instant fuzzy search** — in-memory MiniSearch with Latin & Cyrillic tokenization, field boosting (`tagName: 10x`, `title: 2x`, `note: 1.5x`), completing queries in ≤100ms across 50,000+ fragments.
+- **Rich search operators** — inline query syntax with both English and Russian aliases:
   - Tags: `#tag`, `tag:name`, `тег:name`
   - Domain filters: `site:example.com`, `domain:..`, `сайт:..`, `домен:..`
   - Item type: `type:text|tag|media`, `тип:..`
   - Sorting: `sort:relevance|date_desc|date_asc|visits_desc|visits_asc` (aliases `popular`, `частые`, `редкие`)
   - Date ranges: `after:YYYY-MM-DD`, `before:YYYY-MM-DD`, `date:today|week|month`, `период:сегодня|неделя|месяц`
   - Visit counts: `visits:>N`, `>=N`, `<N`, `<=N`, `N..M`, `multiple`, `once`, `frequent`, `визиты:..`
-- 💡 **Live autocompletion & suggestions** — real-time dropdown suggestions for operators, tags, and domains as you type.
-- 📚 **Grouped page results** — collapses multiple matching snippets under their parent page into an expandable card.
-- 🏷 **Custom tags, notes & selection popover** — select text on any webpage to create custom tagged snippets and annotated notes with auto-generated tags and color-coded badges.
-- 📋 **One-click Markdown quotes** — copy snippet citations formatted as `> text — [Title](url)`.
-- 🎨 **Shadow DOM overlay & standalone search window** — zero style leakage into host pages, keyboard navigation trapping, plus a dedicated standalone search window.
-- 🌐 **Multilingual support** — English and Russian built-in, with a modular file-per-language architecture.
-- 🖼 **Media & document tracking** — indexes images, PDFs, DOC/XLS documents found on visited pages.
-- 📌 **Pinned domains & smart cleanup** — TTL expiration and LRU size eviction with pinned domain protection to prevent data loss on essential sites.
-- 🔒 **Privacy-first & blacklist support** — all data stays local; exclude banking, mail, or private domains via pattern matching.
-- ⚙️ **Configurable settings** — adjust indexing depth, debounce times, retention limits, hotkeys, and language via the options page.
+- **Live autocompletion & suggestions** — real-time dropdown suggestions for operators, tags, and domains as you type.
+- **Grouped page results** — collapses multiple matching snippets under their parent page into an expandable card.
+- **Custom tags, notes & selection popover** — select text on any webpage to create custom tagged snippets and annotated notes with auto-generated tags and color-coded badges.
+- **One-click Markdown quotes** — copy snippet citations formatted as `> text — [Title](url)`.
+- **Shadow DOM overlay & standalone search window** — zero style leakage into host pages, keyboard navigation trapping, plus a dedicated standalone search window.
+- **Multilingual support** — English and Russian built-in, with a modular file-per-language architecture.
+- **Media & document tracking** — indexes images, PDFs, DOC/XLS documents found on visited pages.
+- **Pinned domains & smart cleanup** — TTL expiration and LRU size eviction with pinned domain protection to prevent data loss on essential sites.
+- **Privacy-first & blacklist support** — all data stays local; exclude banking, mail, or private domains via pattern matching.
+- **Configurable settings** — adjust indexing depth, debounce times, retention limits, hotkeys, and language via the options page.
 
 ---
 

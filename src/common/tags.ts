@@ -150,7 +150,11 @@ const patternCache = new Map<string, CompiledPattern>();
 function getCompiledPattern(rawPattern: string): CompiledPattern {
   const p = rawPattern.trim().toLowerCase();
   let cached = patternCache.get(p);
-  if (cached) return cached;
+  if (cached) {
+    patternCache.delete(p);
+    patternCache.set(p, cached);
+    return cached;
+  }
 
   const cleanPattern = p.replace(/^https?:\/\//, '');
   const regexStr =
@@ -166,8 +170,9 @@ function getCompiledPattern(rawPattern: string): CompiledPattern {
   const isWildcardPathOrBare = !cleanPattern.startsWith('*.') && (pathPart === '' || pathPart === '/' || pathPart === '/*');
 
   cached = { cleanPattern, bareDomain, isWildcardPathOrBare, regex };
-  if (patternCache.size > 500) {
-    patternCache.clear();
+  if (patternCache.size >= 500) {
+    const oldestKey = patternCache.keys().next().value;
+    if (oldestKey) patternCache.delete(oldestKey);
   }
   patternCache.set(p, cached);
   return cached;

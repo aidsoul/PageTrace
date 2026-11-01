@@ -33,6 +33,8 @@ export const ru: LocaleTranslations = {
       hotkeyResetBtn: 'Сбросить',
       hotkeyInputTitle: 'Нажмите для записи клавиши',
       hotkeysHintHtml: 'Чтобы изменить системную комбинацию, используйте менеджер горячих клавиш браузера (<code>about:addons</code> → ⚙ → Управление горячими клавишами в Firefox или <code>chrome://extensions/shortcuts</code> в Chrome).',
+      liveHotkeyLabel: 'Поиск по текущей странице',
+      liveHotkeyHintHtml: 'Сочетание клавиш для быстрого поиска по открытой странице.',
       searchLimitsSection: 'Поиск и производительность',
       searchMaxResultsLabel: 'Максимум найденных элементов',
       searchMaxResultsHint: 'Ограничивает общее число результатов, выбираемых поисковым движком за один запрос.',
@@ -41,6 +43,7 @@ export const ru: LocaleTranslations = {
     },
     indexing: {
       rulesSection: 'Правила индексации',
+      depthSection: 'Глубина индексации DOM',
       depthLabel: 'Глубина индексации DOM',
       depthHeadings: 'Заголовки (h1–h6)',
       depthSemantic: 'Семантический текст (рекомендуется)',
@@ -178,7 +181,7 @@ export const ru: LocaleTranslations = {
   },
   popup: {
     pageTitle: 'PageTrace',
-    searchBtn: 'Окно поиска',
+    searchBtn: 'Поиск',
     shortcutPrefix: 'Горячие клавиши:',
     optionsBtn: 'Настройки',
     authorLabel: 'Автор:',
@@ -275,7 +278,15 @@ export const ru: LocaleTranslations = {
     emptyInitial: 'Начните вводить запрос для поиска',
     loading: 'Загрузка индекса…',
     noResults: 'Ничего не найдено',
-    resultsCount: (count: number) => `${count} ${pluralRu(count, 'результат', 'результата', 'результатов')}`,
+    resultsCount: (matchesCount: number, pagesCount?: number) => {
+      const pCount = pagesCount ?? matchesCount;
+      const pagesStr = `${pCount} ${pluralRu(pCount, 'страница', 'страницы', 'страниц')}`;
+      if (matchesCount > pCount) {
+        const matchesStr = `${matchesCount} ${pluralRu(matchesCount, 'совпадение', 'совпадения', 'совпадений')}`;
+        return `${pagesStr} (${matchesStr})`;
+      }
+      return pagesStr;
+    },
     hintNavigate: 'навигация',
     hintOpen: 'открыть',
     hintClose: 'закрыть',
@@ -297,6 +308,19 @@ export const ru: LocaleTranslations = {
     collapseMatches: 'Свернуть совпадения',
     pageMatchesTitle: 'Совпадения на странице',
     autocompleteHint: 'Подсказки',
+    modeToggleGlobal: 'Поиск по всей истории. Нажмите для поиска по текущей странице',
+    modeTogglePage: 'Поиск по этой странице. Нажмите для поиска по всей истории',
+    modeGlobalLabel: 'Вся история',
+    modePageLabel: 'Эта страница',
+    placeholderPage: 'Поиск по этой странице...',
+    liveNoResults: 'На этой странице ничего не найдено',
+    liveMatchesCount: (count: number) => `${count} ${pluralRu(count, 'совпадение на странице', 'совпадения на странице', 'совпадений на странице')}`,
+    liveNavPrev: 'Предыдущее совпадение (Shift+Enter)',
+    liveNavNext: 'Следующее совпадение (Enter)',
+    liveNavClose: 'Закрыть поиск (Esc)',
+    liveNavExpand: 'Развернуть список совпадений',
+    liveExpandList: 'Развернуть список совпадений',
+    liveCollapseList: 'Свернуть в компактную панель',
   },
   content: {
     createIndexBtn: 'Создать индекс',

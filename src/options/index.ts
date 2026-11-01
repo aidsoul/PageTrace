@@ -880,6 +880,9 @@ async function applySettingsToForm(s: UserSettings): Promise<void> {
     ($<HTMLTextAreaElement>('whitelist')).value = (s.whitelist || []).join('\n');
   }
   ($<HTMLInputElement>('hotkeyDisplay')).value = s.hotkey;
+  if ($<HTMLInputElement>('liveHotkeyDisplay')) {
+    ($<HTMLInputElement>('liveHotkeyDisplay')).value = s.liveSearchHotkey || 'Alt+Shift+L';
+  }
   if ($<HTMLSelectElement>('searchMaxResults')) {
     ($<HTMLSelectElement>('searchMaxResults')).value = String(s.searchMaxResults || 100);
   }
@@ -922,10 +925,23 @@ async function loadUI(): Promise<void> {
     await autoSaveCurrentSettings();
   });
 
+  const liveHotkeyInput = $<HTMLInputElement>('liveHotkeyDisplay');
+  liveHotkeyInput?.addEventListener('keydown', async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    const combo = formatHotkeyEvent(e);
+    if (!combo) return;
+
+    liveHotkeyInput.value = combo;
+    liveHotkeyInput.blur();
+    await autoSaveCurrentSettings();
+  });
+
   window.addEventListener(
     'keydown',
     (e: KeyboardEvent) => {
-      if (document.activeElement === hotkeyInput) return;
+      if (document.activeElement === hotkeyInput || document.activeElement === liveHotkeyInput) return;
       const enabledEl = $<HTMLInputElement>('enabled');
       if (enabledEl && !enabledEl.checked) return;
       const targetHotkey = hotkeyInput?.value || '';
@@ -1096,6 +1112,7 @@ function collectSettings(): Partial<UserSettings> {
     whitelist,
     pinnedDomains,
     hotkey: ($<HTMLInputElement>('hotkeyDisplay')).value,
+    liveSearchHotkey: ($<HTMLInputElement>('liveHotkeyDisplay'))?.value || 'Alt+Shift+L',
     searchMaxResults: Number(($<HTMLSelectElement>('searchMaxResults'))?.value || 100),
     searchPageSize: Number(($<HTMLSelectElement>('searchPageSize'))?.value || 20),
   };
@@ -1139,6 +1156,11 @@ $('clearDb').addEventListener('click', async () => {
 
 $('resetHotkey').addEventListener('click', async () => {
   ($<HTMLInputElement>('hotkeyDisplay')).value = 'Alt+Shift+F';
+  await autoSaveCurrentSettings();
+});
+
+$('resetLiveHotkey')?.addEventListener('click', async () => {
+  ($<HTMLInputElement>('liveHotkeyDisplay')).value = 'Alt+Shift+L';
   await autoSaveCurrentSettings();
 });
 
@@ -1282,6 +1304,9 @@ async function importSettingsData(file: File): Promise<void> {
   }
   if (typeof rawSettings.hotkey === 'string' && rawSettings.hotkey.trim()) {
     sanitizedSettings.hotkey = rawSettings.hotkey.trim();
+  }
+  if (typeof rawSettings.liveSearchHotkey === 'string' && rawSettings.liveSearchHotkey.trim()) {
+    sanitizedSettings.liveSearchHotkey = rawSettings.liveSearchHotkey.trim();
   }
   if (typeof rawSettings.enabled === 'boolean') {
     sanitizedSettings.enabled = rawSettings.enabled;

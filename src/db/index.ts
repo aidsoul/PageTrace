@@ -1,11 +1,20 @@
 import Dexie, { type Table } from 'dexie';
 import browser from 'webextension-polyfill';
-import type { PageRecord, TextChunk, MediaItem, CustomTagIndex, AutoTagRule } from '@/types/index';
+import type { PageRecord, TextChunk, MediaItem, CustomTagIndex, AutoTagRule, SearchDoc } from '@/types/index';
 import { getSettings } from '@/common/settings';
 import { matchUrlPattern, normalizeTagName } from '@/common/tags';
 import { normalizePageUrl, normalizeIndexedText } from '@/common/search-utils';
+import { safeCompressText, safeDecompressText } from '@/common/compression';
 
 export { normalizePageUrl, normalizeIndexedText };
+
+export interface SearchCacheRecord {
+  key: string;
+  revision: number;
+  indexJson: string;
+  docs: SearchDoc[];
+  updatedAt: number;
+}
 
 export interface DbSearchSyncHooks {
   onPageUpserted?: (
@@ -35,6 +44,7 @@ export class PageTraceDB extends Dexie {
   text_chunks!: Table<TextChunk, number>;
   media_items!: Table<MediaItem, number>;
   custom_indexes!: Table<CustomTagIndex, number>;
+  search_cache!: Table<SearchCacheRecord, string>;
 
   constructor() {
     super('PageTraceDB');
@@ -69,6 +79,10 @@ export class PageTraceDB extends Dexie {
             }
           });
       });
+
+    this.version(5).stores({
+      search_cache: 'key, updatedAt',
+    });
   }
 }
 
@@ -101,12 +115,16 @@ function getMediaUniqueKey(m: Pick<MediaItem, 'type' | 'url' | 'title' | 'alt' |
 
 export async function deletePagesCascade(pageIds: number[]): Promise<void> {
   if (pageIds.length === 0) return;
-  await db.transaction('rw', db.pages, db.text_chunks, db.media_items, db.custom_indexes, async () => {
-    await db.text_chunks.where('pageId').anyOf(pageIds).delete();
-    await db.media_items.where('pageId').anyOf(pageIds).delete();
-    await db.custom_indexes.where('pageId').anyOf(pageIds).delete();
-    await db.pages.bulkDelete(pageIds);
-  });
+  const CHUNK_SIZE = 200;
+  for (let i = 0; i < pageIds.length; i += CHUNK_SIZE) {
+    const chunk = pageIds.slice(i, i + CHUNK_SIZE);
+    await db.transaction('rw', db.pages, db.text_chunks, db.media_items, db.custom_indexes, async () => {
+      await db.text_chunks.where('pageId').anyOf(chunk).delete();
+      await db.media_items.where('pageId').anyOf(chunk).delete();
+      await db.custom_indexes.where('pageId').anyOf(chunk).delete();
+      await db.pages.bulkDelete(chunk);
+    });
+  }
 }
 
 export async function deletePageById(pageId: number): Promise<void> {
@@ -135,15 +153,16 @@ export async function upsertPage(
   favicon: string,
   chunks: Omit<TextChunk, 'id' | 'pageId' | 'createdAt'>[],
   media: Omit<MediaItem, 'id' | 'pageId' | 'createdAt'>[],
+  autoTagRules?: AutoTagRule[],
 ): Promise<void> {
   const now = Date.now();
   const url = normalizePageUrl(rawUrl);
 
   const autoTags: string[] = [];
   try {
-    const s = await getSettings();
-    if (s.autoTagRules && s.autoTagRules.length > 0) {
-      for (const rule of s.autoTagRules) {
+    const rules = autoTagRules !== undefined ? autoTagRules : (await getSettings()).autoTagRules;
+    if (rules && rules.length > 0) {
+      for (const rule of rules) {
         if (matchUrlPattern(rule.pattern, url)) {
           const norm = normalizeTagName(rule.tag);
           if (norm && !autoTags.includes(norm)) {
@@ -192,6 +211,37 @@ export async function upsertPage(
   const metaBytes =
     ((url.length || 0) + (title?.length || 0) + (favicon?.length || 0)) * 2 + 64;
   const totalSizeBytes = chunksBytes + mediaBytes + metaBytes;
+
+  const compressedChunks: Array<{
+    text: string;
+    compressedText?: Uint8Array;
+    selector: string;
+    depth: number;
+  }> = [];
+
+  const COMPRESS_BATCH_SIZE = 25;
+  for (let i = 0; i < uniqueChunks.length; i += COMPRESS_BATCH_SIZE) {
+    const batch = uniqueChunks.slice(i, i + COMPRESS_BATCH_SIZE);
+    const batchProcessed = await Promise.all(
+      batch.map(async (c) => {
+        const compressed = await safeCompressText(c.text);
+        if (compressed) {
+          return {
+            text: '',
+            compressedText: compressed,
+            selector: c.selector || '',
+            depth: c.depth ?? 0,
+          };
+        }
+        return {
+          text: c.text,
+          selector: c.selector || '',
+          depth: c.depth ?? 0,
+        };
+      }),
+    );
+    compressedChunks.push(...batchProcessed);
+  }
 
   let savedPage!: PageRecord;
   let savedChunks: TextChunk[] = [];
@@ -262,9 +312,9 @@ export async function upsertPage(
     }
 
     if (uniqueChunks.length > 0) {
-      const chunkRecords = uniqueChunks.map((c) => ({ ...c, pageId, createdAt: now }));
+      const chunkRecords = compressedChunks.map((c) => ({ ...c, pageId, createdAt: now }));
       const chunkIds = (await db.text_chunks.bulkAdd(chunkRecords, { allKeys: true })) as number[];
-      savedChunks = chunkRecords.map((c, idx) => ({ ...c, id: chunkIds[idx] }));
+      savedChunks = uniqueChunks.map((c, idx) => ({ ...c, id: chunkIds[idx], pageId, createdAt: now }));
     }
 
     if (uniqueMedia.length > 0) {
@@ -310,18 +360,36 @@ export async function touchPageAccess(params: { pageId?: number; url?: string })
   }
 }
 
+export async function resolveChunkText(chunk: TextChunk): Promise<string> {
+  if (chunk.text) return chunk.text;
+  if (chunk.compressedText) {
+    const decompressed = await safeDecompressText(chunk.compressedText);
+    if (decompressed !== null) {
+      chunk.text = decompressed;
+      return decompressed;
+    }
+  }
+  return '';
+}
+
 export async function getIndexSnapshot(): Promise<{
   pages: PageRecord[];
   chunks: TextChunk[];
   media: MediaItem[];
   customIndexes: CustomTagIndex[];
 }> {
-  const [pages, chunks, media, customIndexes] = await Promise.all([
+  const [pages, rawChunks, media, customIndexes] = await Promise.all([
     db.pages.toArray(),
     db.text_chunks.toArray(),
     db.media_items.toArray(),
     db.custom_indexes.toArray(),
   ]);
+  const chunks = await Promise.all(
+    rawChunks.map(async (c) => {
+      await resolveChunkText(c);
+      return c;
+    }),
+  );
   return { pages, chunks, media, customIndexes };
 }
 
@@ -349,77 +417,93 @@ export async function addCustomIndex(item: {
   const normText = normalizeIndexedText(trimmedText);
   const normName = normalizeIndexedText(finalName);
 
-  let page =
-    (await db.pages.where('url').equals(cleanUrl).first()) ||
-    (item.url !== cleanUrl ? await db.pages.where('url').equals(item.url).first() : undefined);
+  let duplicateId: number | null = null;
+  let savedRecord: CustomTagIndex | null = null;
+  let savedPage: PageRecord | undefined;
 
-  const pageCustomCandidates = await Promise.all([
-    page?.id !== undefined ? db.custom_indexes.where('pageId').equals(page.id).toArray() : Promise.resolve([]),
-    db.custom_indexes.where('url').equals(cleanUrl).toArray(),
-  ]);
-  const seenCandidateIds = new Set<number>();
-  const candidates: CustomTagIndex[] = [];
-  for (const list of pageCustomCandidates) {
-    for (const ci of list) {
-      if (ci.id !== undefined && !seenCandidateIds.has(ci.id)) {
-        seenCandidateIds.add(ci.id);
-        candidates.push(ci);
+  await db.transaction('rw', db.pages, db.custom_indexes, async () => {
+    let page =
+      (await db.pages.where('url').equals(cleanUrl).first()) ||
+      (item.url !== cleanUrl ? await db.pages.where('url').equals(item.url).first() : undefined);
+
+    const pageCustomCandidates = await Promise.all([
+      page?.id !== undefined ? db.custom_indexes.where('pageId').equals(page.id).toArray() : Promise.resolve([]),
+      db.custom_indexes.where('url').equals(cleanUrl).toArray(),
+    ]);
+    const seenCandidateIds = new Set<number>();
+    const candidates: CustomTagIndex[] = [];
+    for (const list of pageCustomCandidates) {
+      for (const ci of list) {
+        if (ci.id !== undefined && !seenCandidateIds.has(ci.id)) {
+          seenCandidateIds.add(ci.id);
+          candidates.push(ci);
+        }
       }
     }
-  }
 
-  const duplicateIndex = candidates.find((ci) => {
-    const ciNormText = normalizeIndexedText(ci.text);
-    const ciNormName = normalizeIndexedText(ci.name);
-    return (normText && ciNormText === normText) || (normName && ciNormName === normName);
+    const duplicateIndex = candidates.find((ci) => {
+      const ciNormText = normalizeIndexedText(ci.text);
+      const ciNormName = normalizeIndexedText(ci.name);
+      return (normText && ciNormText === normText) || (normName && ciNormName === normName);
+    });
+
+    if (duplicateIndex && duplicateIndex.id !== undefined) {
+      duplicateId = duplicateIndex.id;
+      return;
+    }
+
+    let pageId: number;
+    if (!page) {
+      pageId = (await db.pages.add({
+        url: cleanUrl,
+        title: item.pageTitle || cleanUrl,
+        favicon: item.favicon || '',
+        createdAt: now,
+        lastAccessedAt: now,
+        sizeBytes: trimmedText.length * 2,
+      })) as number;
+      page = {
+        id: pageId,
+        url: cleanUrl,
+        title: item.pageTitle || cleanUrl,
+        favicon: item.favicon || '',
+        createdAt: now,
+        lastAccessedAt: now,
+        sizeBytes: trimmedText.length * 2,
+      };
+    } else {
+      pageId = page.id!;
+      await db.pages.update(pageId, { lastAccessedAt: now });
+    }
+
+    const record: CustomTagIndex = {
+      pageId,
+      url: cleanUrl,
+      pageTitle: item.pageTitle || cleanUrl,
+      favicon: item.favicon || '',
+      name: finalName,
+      text: trimmedText,
+      note: cleanNote,
+      selector: item.selector || '',
+      createdAt: now,
+    };
+
+    const id = (await db.custom_indexes.add(record)) as number;
+    record.id = id;
+    savedRecord = record;
+    savedPage = page;
   });
 
-  if (duplicateIndex && duplicateIndex.id !== undefined) {
-    return { id: duplicateIndex.id, duplicate: true };
+  if (duplicateId !== null) {
+    return { id: duplicateId, duplicate: true };
   }
-
-  let pageId: number;
-  if (!page) {
-    pageId = (await db.pages.add({
-      url: cleanUrl,
-      title: item.pageTitle || cleanUrl,
-      favicon: item.favicon || '',
-      createdAt: now,
-      lastAccessedAt: now,
-      sizeBytes: trimmedText.length * 2,
-    })) as number;
-    page = {
-      id: pageId,
-      url: cleanUrl,
-      title: item.pageTitle || cleanUrl,
-      favicon: item.favicon || '',
-      createdAt: now,
-      lastAccessedAt: now,
-      sizeBytes: trimmedText.length * 2,
-    };
-  } else {
-    pageId = page.id!;
-    await db.pages.update(pageId, { lastAccessedAt: now });
-  }
-
-  const record: CustomTagIndex = {
-    pageId,
-    url: cleanUrl,
-    pageTitle: item.pageTitle || cleanUrl,
-    favicon: item.favicon || '',
-    name: finalName,
-    text: trimmedText,
-    note: cleanNote,
-    selector: item.selector || '',
-    createdAt: now,
-  };
-
-  const id = (await db.custom_indexes.add(record)) as number;
-  record.id = id;
 
   const rev = bumpDbRevision();
-  searchSyncHooks?.onCustomIndexUpserted?.(record, page, rev);
-  return { id, duplicate: false };
+  if (savedRecord) {
+    searchSyncHooks?.onCustomIndexUpserted?.(savedRecord, savedPage, rev);
+    return { id: (savedRecord as CustomTagIndex).id!, duplicate: false };
+  }
+  return { id: -1, duplicate: false };
 }
 
 export async function deleteCustomIndex(id: number): Promise<void> {
@@ -529,8 +613,13 @@ export async function cleanupExpired(ttlDays: number, pinnedDomains?: string[]):
 // Remove oldest unpinned pages if total size exceeds maxSizeMb
 export async function evictLRU(maxSizeMb: number, pinnedDomains?: string[]): Promise<void> {
   const maxBytes = maxSizeMb * 1024 * 1024;
-  const pages = await db.pages.orderBy('lastAccessedAt').toArray();
-  let total = pages.reduce((s, p) => s + (p.sizeBytes ?? 0), 0);
+  const pageCount = await db.pages.count();
+  if (pageCount === 0) return;
+
+  let total = 0;
+  await db.pages.each((p) => {
+    total += p.sizeBytes ?? 0;
+  });
 
   if (total <= maxBytes) return;
 
@@ -545,16 +634,22 @@ export async function evictLRU(maxSizeMb: number, pinnedDomains?: string[]): Pro
   }
 
   const idsToEvict: number[] = [];
-  for (const page of pages) {
-    if (total <= maxBytes) break;
-    if (page.id !== undefined) {
-      if (isUrlPinned(page.url, pinned)) {
-        continue;
+  let stopped = false;
+  await db.pages
+    .orderBy('lastAccessedAt')
+    .until(() => stopped)
+    .each((page) => {
+      if (page.id !== undefined) {
+        if (isUrlPinned(page.url, pinned)) {
+          return;
+        }
+        idsToEvict.push(page.id);
+        total -= page.sizeBytes ?? 0;
+        if (total <= maxBytes) {
+          stopped = true;
+        }
       }
-      idsToEvict.push(page.id);
-      total -= page.sizeBytes ?? 0;
-    }
-  }
+    });
 
   if (idsToEvict.length > 0) {
     await deletePagesCascade(idsToEvict);
@@ -595,17 +690,12 @@ export async function getStorageStats(): Promise<StorageStats> {
   ]);
 
   if (bytes === 0 && (pagesCount > 0 || indexesCount > 0)) {
-    const [pages, customIndexes] = await Promise.all([
-      db.pages.toArray(),
-      db.custom_indexes.toArray(),
-    ]);
-
-    for (const p of pages) {
+    await db.pages.each((p) => {
       bytes += p.sizeBytes || (((p.url?.length || 0) + (p.title?.length || 0) + (p.favicon?.length || 0)) * 2 + 64);
-    }
-    for (const ci of customIndexes) {
+    });
+    await db.custom_indexes.each((ci) => {
       bytes += ((ci.name?.length || 0) + (ci.text?.length || 0) + (ci.url?.length || 0) + (ci.pageTitle?.length || 0) + (ci.selector?.length || 0)) * 2 + 32;
-    }
+    });
   }
 
   return {
@@ -623,13 +713,65 @@ export async function getUsedStorageMb(): Promise<number> {
   return stats.mb;
 }
 
+export async function saveSearchCache(snapshot: {
+  version?: number;
+  revision: number;
+  indexJson: string;
+  docs: SearchDoc[];
+}): Promise<void> {
+  try {
+    const MAX_INDEX_CACHE_BYTES = 20 * 1024 * 1024;
+    if (snapshot.indexJson.length > MAX_INDEX_CACHE_BYTES) {
+      await db.search_cache.clear();
+      return;
+    }
+    await db.search_cache.put({
+      key: 'snapshot',
+      revision: snapshot.revision,
+      indexJson: snapshot.indexJson,
+      docs: snapshot.docs,
+      updatedAt: Date.now(),
+    });
+  } catch (err) {
+    console.warn('[PageTraceDB] Error saving search cache to IndexedDB:', err);
+  }
+}
+
+export async function loadSearchCache(): Promise<{
+  version: 1;
+  revision: number;
+  indexJson: string;
+  docs: SearchDoc[];
+} | null> {
+  try {
+    const record = await db.search_cache.get('snapshot');
+    if (!record) return null;
+    return {
+      version: 1,
+      revision: record.revision,
+      indexJson: record.indexJson,
+      docs: record.docs,
+    };
+  } catch (err) {
+    console.warn('[PageTraceDB] Error loading search cache from IndexedDB:', err);
+    return null;
+  }
+}
+
+export async function clearSearchCache(): Promise<void> {
+  try {
+    await db.search_cache.clear();
+  } catch {}
+}
+
 // Clear entire database
 export async function clearDatabase(): Promise<void> {
-  await db.transaction('rw', db.pages, db.text_chunks, db.media_items, db.custom_indexes, async () => {
+  await db.transaction('rw', db.pages, db.text_chunks, db.media_items, db.custom_indexes, db.search_cache, async () => {
     await db.text_chunks.clear();
     await db.media_items.clear();
     await db.custom_indexes.clear();
     await db.pages.clear();
+    await db.search_cache.clear();
   });
   const rev = bumpDbRevision();
   searchSyncHooks?.onDatabaseCleared?.(rev);

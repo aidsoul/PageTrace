@@ -93,6 +93,7 @@ function renderSnoozeState(pausedUntil: number, lang: string): void {
 async function init(): Promise<void> {
   const settings = await getSettings();
   let currentHotkey = settings.hotkey || 'Alt+Shift+F';
+  let currentLiveHotkey = settings.liveSearchHotkey || 'Alt+Shift+L';
   let currentEnabled = settings.enabled;
   let currentLanguage = settings.language;
 
@@ -122,6 +123,9 @@ async function init(): Promise<void> {
       if (next.hotkey) {
         currentHotkey = next.hotkey;
         renderShortcutKeys(currentHotkey);
+      }
+      if (next.liveSearchHotkey) {
+        currentLiveHotkey = next.liveSearchHotkey;
       }
     }
 
@@ -196,12 +200,21 @@ async function init(): Promise<void> {
   window.addEventListener(
     'keydown',
     async (e: KeyboardEvent) => {
-      if (!currentEnabled || !currentHotkey) return;
-      if (matchesHotkey(e, currentHotkey)) {
+      if (!currentEnabled) return;
+      if (currentLiveHotkey && matchesHotkey(e, currentLiveHotkey)) {
         e.preventDefault();
         e.stopPropagation();
         try {
-          await browser.runtime.sendMessage({ type: 'OPEN_SEARCH_WINDOW' });
+          await browser.runtime.sendMessage({ type: 'TOGGLE_OVERLAY', mode: 'page' });
+        } catch {}
+        window.close();
+        return;
+      }
+      if (currentHotkey && matchesHotkey(e, currentHotkey)) {
+        e.preventDefault();
+        e.stopPropagation();
+        try {
+          await browser.runtime.sendMessage({ type: 'OPEN_SEARCH_WINDOW', mode: 'global' });
         } catch {}
         window.close();
       }

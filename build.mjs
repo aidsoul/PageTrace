@@ -21,17 +21,17 @@ const targetArg = args.find((a) => !a.startsWith('-'));
 const targets = targetArg === 'chrome'
   ? ['chrome']
   : targetArg === 'firefox'
-  ? ['firefox']
-  : ['firefox', 'chrome'];
+    ? ['firefox']
+    : ['firefox', 'chrome'];
 
 // Extension entry points
 const ENTRIES = [
   { name: 'background', input: 'src/background/index.ts', format: 'es' },
-  { name: 'content',    input: 'src/content/index.ts',    format: 'iife' },
-  { name: 'overlay',   input: 'src/overlay/index.ts',    format: 'iife' },
-  { name: 'options',   input: 'src/options/index.ts',    format: 'iife' },
-  { name: 'popup',     input: 'src/popup/index.ts',      format: 'iife' },
-  { name: 'search',    input: 'src/search-window/index.ts', format: 'iife' },
+  { name: 'content', input: 'src/content/index.ts', format: 'iife' },
+  { name: 'overlay', input: 'src/overlay/index.ts', format: 'iife' },
+  { name: 'options', input: 'src/options/index.ts', format: 'iife' },
+  { name: 'popup', input: 'src/popup/index.ts', format: 'iife' },
+  { name: 'search', input: 'src/search-window/index.ts', format: 'iife' },
 ];
 
 function esbuildMinifyPlugin() {
@@ -86,29 +86,31 @@ async function buildTarget(browser) {
   if (existsSync(outDir)) rmSync(outDir, { recursive: true });
   mkdirSync(outDir, { recursive: true });
 
-  for (const entry of ENTRIES) {
-    console.log(`\n📦 Building ${entry.name} (${entry.format}) for ${browser}…`);
-    const bundle = await rollup({
-      input: resolve(__dirname, entry.input),
-      plugins: getPlugins(browser),
-      onwarn(warning, warn) {
-        if (warning.code === 'CIRCULAR_DEPENDENCY') return;
-        if (warning.code === 'THIS_IS_UNDEFINED') return;
-        warn(warning);
-      },
-    });
+  await Promise.all(
+    ENTRIES.map(async (entry) => {
+      console.log(`\n📦 Building ${entry.name} (${entry.format}) for ${browser}…`);
+      const bundle = await rollup({
+        input: resolve(__dirname, entry.input),
+        plugins: getPlugins(browser),
+        onwarn(warning, warn) {
+          if (warning.code === 'CIRCULAR_DEPENDENCY') return;
+          if (warning.code === 'THIS_IS_UNDEFINED') return;
+          warn(warning);
+        },
+      });
 
-    await bundle.write({
-      file: resolve(outDir, `${entry.name}.js`),
-      format: entry.format,
-      name: entry.name === 'background' ? undefined : `PT_${entry.name}`,
-      inlineDynamicImports: true,
-      sourcemap: false,
-    });
+      await bundle.write({
+        file: resolve(outDir, `${entry.name}.js`),
+        format: entry.format,
+        name: entry.name === 'background' ? undefined : `PT_${entry.name}`,
+        inlineDynamicImports: true,
+        sourcemap: false,
+      });
 
-    await bundle.close();
-    console.log(`   ✓ dist/${browser}/${entry.name}.js`);
-  }
+      await bundle.close();
+      console.log(`   ✓ dist/${browser}/${entry.name}.js`);
+    }),
+  );
 
   // Copy manifest
   const manifestSrc = resolve(__dirname, `manifests/manifest.${browser}.json`);

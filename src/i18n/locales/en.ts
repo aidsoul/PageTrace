@@ -24,6 +24,8 @@ export const en: LocaleTranslations = {
       hotkeyResetBtn: 'Reset',
       hotkeyInputTitle: 'Click to record shortcut',
       hotkeysHintHtml: 'To change the system shortcut, use the browser shortcut manager (<code>about:addons</code> → ⚙ → Manage Extension Shortcuts in Firefox or <code>chrome://extensions/shortcuts</code> in Chrome).',
+      liveHotkeyLabel: 'Search this page shortcut',
+      liveHotkeyHintHtml: 'Shortcut to open live search directly on the current tab.',
       searchLimitsSection: 'Search & Performance',
       searchMaxResultsLabel: 'Maximum search results',
       searchMaxResultsHint: 'Limits the total number of matching items returned by the search engine per query.',
@@ -32,6 +34,7 @@ export const en: LocaleTranslations = {
     },
     indexing: {
       rulesSection: 'Indexing Rules',
+      depthSection: 'DOM Indexing Depth',
       depthLabel: 'DOM indexing depth',
       depthHeadings: 'Headings (h1–h6)',
       depthSemantic: 'Semantic text (recommended)',
@@ -169,7 +172,7 @@ export const en: LocaleTranslations = {
   },
   popup: {
     pageTitle: 'PageTrace',
-    searchBtn: 'Search Window',
+    searchBtn: 'Search',
     shortcutPrefix: 'Shortcut:',
     optionsBtn: 'Settings',
     authorLabel: 'Author:',
@@ -266,7 +269,15 @@ export const en: LocaleTranslations = {
     emptyInitial: 'Start typing a search query',
     loading: 'Loading index…',
     noResults: 'Nothing found',
-    resultsCount: (count: number) => `${count} ${count === 1 ? 'result' : 'results'}`,
+    resultsCount: (matchesCount: number, pagesCount?: number) => {
+      const pCount = pagesCount ?? matchesCount;
+      const pagesStr = `${pCount} ${pCount === 1 ? 'page' : 'pages'}`;
+      if (matchesCount > pCount) {
+        const matchesStr = `${matchesCount} ${matchesCount === 1 ? 'match' : 'matches'}`;
+        return `${pagesStr} (${matchesStr})`;
+      }
+      return pagesStr;
+    },
     hintNavigate: 'navigate',
     hintOpen: 'open',
     hintClose: 'close',
@@ -288,6 +299,19 @@ export const en: LocaleTranslations = {
     collapseMatches: 'Collapse matches',
     pageMatchesTitle: 'Matches on page',
     autocompleteHint: 'Suggestions',
+    modeToggleGlobal: 'Search all history. Click to search this page',
+    modeTogglePage: 'Search this page. Click to search all history',
+    modeGlobalLabel: 'All pages',
+    modePageLabel: 'This page',
+    placeholderPage: 'Search on this page...',
+    liveNoResults: 'No matches found on this page',
+    liveMatchesCount: (count: number) => count === 1 ? '1 match on this page' : `${count} matches on this page`,
+    liveNavPrev: 'Previous match (Shift+Enter)',
+    liveNavNext: 'Next match (Enter)',
+    liveNavClose: 'Close search (Esc)',
+    liveNavExpand: 'Show all matches list',
+    liveExpandList: 'Expand matches list',
+    liveCollapseList: 'Collapse to compact bar',
   },
   content: {
     createIndexBtn: 'Create index',

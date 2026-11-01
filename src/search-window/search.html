@@ -50,6 +50,9 @@
       padding: 16px 20px 12px;
       background: var(--bg-main);
       flex-shrink: 0;
+      max-width: 960px;
+      width: 100%;
+      margin: 0 auto;
     }
 
     .search-pill {
@@ -126,6 +129,9 @@
       padding: 0 20px 10px;
       background: var(--bg-main);
       flex-shrink: 0;
+      max-width: 960px;
+      width: 100%;
+      margin: 0 auto;
     }
 
     .filter-tabs {
@@ -170,6 +176,10 @@
       color: var(--text-muted);
       pointer-events: none;
       transition: color 0.15s ease;
+    }
+
+    .visits-select {
+      padding-left: 12px !important;
     }
 
     .type-select,
@@ -260,7 +270,9 @@
       flex-direction: column;
       gap: 0;
       background: var(--bg-card);
-      margin: 0 20px 14px;
+      max-width: 960px;
+      width: calc(100% - 40px);
+      margin: 0 auto 14px;
       border: 1px solid var(--border-card);
       border-radius: 12px;
     }
@@ -681,6 +693,9 @@
       font-size: 11.5px;
       color: var(--text-muted);
       flex-shrink: 0;
+      max-width: 960px;
+      width: 100%;
+      margin: 0 auto;
     }
 
     .footer-count {
@@ -782,10 +797,6 @@
         </div>
 
         <div class="visits-wrap" id="visitsWrap">
-          <svg class="visits-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
-            <circle cx="12" cy="12" r="3"></circle>
-          </svg>
           <select
             class="visits-select"
             id="visitsSelect"

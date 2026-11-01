@@ -6,6 +6,9 @@ export type IndexDepth = 'headings' | 'semantic' | 'full';
 /** Supported media file extensions for whitelist */
 export type MediaExtension = 'png' | 'jpg' | 'jpeg' | 'webp' | 'gif' | 'svg' | 'pdf' | 'doc' | 'docx' | 'xls' | 'xlsx' | 'csv';
 
+/** In-page search mode: all visited pages or current tab */
+export type SearchMode = 'global' | 'page';
+
 /** A single indexed web page */
 export interface PageRecord {
   id?: number;
@@ -29,8 +32,10 @@ export interface PageRecord {
 export interface TextChunk {
   id?: number;
   pageId: number;
-  /** Raw text content */
+  /** Raw text content (or decompressed on read) */
   text: string;
+  /** Optional compressed text content stored in IndexedDB */
+  compressedText?: Uint8Array;
   /** 0-based DOM node path / selector hint */
   selector: string;
   /** Heading level: 1–6 for h1–h6, 0 for body text */
@@ -117,6 +122,8 @@ export interface UserSettings {
   maxSizeMb: number;
   /** Custom hotkey override (e.g. "Alt+Shift+F") */
   hotkey: string;
+  /** Custom hotkey for in-page live search (e.g. "Alt+Shift+L") */
+  liveSearchHotkey: string;
   /** Whether extension is globally enabled */
   enabled: boolean;
   /** Maximum number of results returned by search engine */
@@ -152,6 +159,7 @@ export const DEFAULT_SETTINGS: UserSettings = {
   ttlDays: 30,
   maxSizeMb: 150,
   hotkey: 'Alt+Shift+F',
+  liveSearchHotkey: 'Alt+Shift+L',
   enabled: true,
   searchMaxResults: 100,
   searchPageSize: 20,
@@ -189,6 +197,18 @@ export interface IndexPageMessage {
 /** Message from background/popup to content script to trigger overlay */
 export interface ToggleOverlayMessage {
   type: 'TOGGLE_OVERLAY';
+  mode?: SearchMode;
+}
+
+/** Message from popup/options to background to open search window or overlay */
+export interface OpenSearchWindowMessage {
+  type: 'OPEN_SEARCH_WINDOW';
+  mode?: SearchMode;
+}
+
+/** Message to directly open search in a new browser tab */
+export interface OpenSearchTabMessage {
+  type: 'OPEN_SEARCH_TAB';
 }
 
 /** Message from content script asking background to scroll to text */
@@ -269,9 +289,16 @@ export interface GetSearchSuggestionsMessage {
   type: 'GET_SEARCH_SUGGESTIONS';
 }
 
+/** Message from content script to ensure overlay bundle is injected */
+export interface EnsureOverlayInjectedMessage {
+  type: 'ENSURE_OVERLAY_INJECTED';
+}
+
 export type ExtensionMessage =
   | IndexPageMessage
   | ToggleOverlayMessage
+  | OpenSearchWindowMessage
+  | OpenSearchTabMessage
   | ScrollToMessage
   | NavigateToResultMessage
   | SaveCustomIndexMessage
@@ -282,7 +309,8 @@ export type ExtensionMessage =
   | TouchPageMessage
   | ExecuteSearchQueryMessage
   | DeletePageMessage
-  | GetSearchSuggestionsMessage;
+  | GetSearchSuggestionsMessage
+  | EnsureOverlayInjectedMessage;
 
 /** Content type filter for search results */
 export type SearchTypeFilter = 'all' | 'text' | 'tag' | 'media';
@@ -340,5 +368,27 @@ export interface SearchResult {
   /** Snippet with HTML <mark> tags around matches */
   snippet: string;
   score: number;
+}
+
+/** In-memory document indexed by MiniSearch */
+export interface SearchDoc {
+  id: string;
+  numericId: number;
+  pageId: number;
+  url: string;
+  hostnameLower: string;
+  urlLower: string;
+  title: string;
+  favicon: string;
+  text: string;
+  note?: string;
+  selector: string;
+  type: 'text' | 'media' | 'tag';
+  tagName?: string;
+  tagNameLower: string;
+  normTags: string[];
+  tags?: string[];
+  createdAt?: number;
+  visitCount?: number;
 }
 

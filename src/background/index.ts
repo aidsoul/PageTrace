@@ -12,6 +12,9 @@ import {
   touchPageAccess,
   getIndexSnapshot,
   getLocalDbRevision,
+  loadSearchCache,
+  saveSearchCache,
+  clearSearchCache,
 } from '@/db/index';
 import {
   rebuildIndex,
@@ -45,7 +48,6 @@ import { getLocale, DEFAULT_LANGUAGE } from '@/i18n/index';
 
 // Background service worker
 
-const SEARCH_CACHE_STORAGE_KEY = 'pt_search_cache';
 let indexRebuildPromise: Promise<void> | null = null;
 let cachePersistTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -55,17 +57,11 @@ function scheduleSearchCachePersist(): void {
     cachePersistTimer = null;
     const snapshot = serializeSearchIndex(getLocalDbRevision());
     if (!snapshot) {
-      browser.storage.local.remove(SEARCH_CACHE_STORAGE_KEY).catch(() => {});
+      void clearSearchCache();
       return;
     }
-    try {
-      browser.storage.local.set({ [SEARCH_CACHE_STORAGE_KEY]: snapshot }).catch(() => {
-        browser.storage.local.remove(SEARCH_CACHE_STORAGE_KEY).catch(() => {});
-      });
-    } catch {
-      browser.storage.local.remove(SEARCH_CACHE_STORAGE_KEY).catch(() => {});
-    }
-  }, 1200);
+    void saveSearchCache(snapshot);
+  }, 800);
 }
 
 async function ensureBackgroundSearchIndex(): Promise<void> {
@@ -81,10 +77,8 @@ async function ensureBackgroundSearchIndex(): Promise<void> {
     try {
       if (!isIndexInitialized()) {
         try {
-          const stored = await browser.storage.local.get(['pt_db_rev', SEARCH_CACHE_STORAGE_KEY]);
-          const storedRev = Number(stored?.['pt_db_rev']) || currentRev;
-          const cached = stored?.[SEARCH_CACHE_STORAGE_KEY] as { revision?: number } | undefined;
-          if (cached && cached.revision === storedRev && hydrateSearchIndex(cached)) {
+          const cached = await loadSearchCache();
+          if (cached && cached.revision === currentRev && hydrateSearchIndex(cached)) {
             return;
           }
         } catch {
@@ -135,15 +129,20 @@ async function updateContextMenu(trigger?: IndexCreationTrigger, lang?: string):
   }
 }
 
-async function syncBrowserCommandShortcut(hotkey?: string): Promise<void> {
+async function syncBrowserCommandShortcut(hotkey?: string, liveHotkey?: string): Promise<void> {
   try {
     const commandsApi = browser.commands as typeof browser.commands & {
       update?: (detail: { name: string; shortcut: string }) => Promise<void>;
     };
     if (typeof commandsApi?.update !== 'function') return;
-    const targetHotkey = hotkey || (await getSettings()).hotkey;
+    const settings = await getSettings();
+    const targetHotkey = hotkey || settings.hotkey;
+    const targetLiveHotkey = liveHotkey || settings.liveSearchHotkey;
     if (targetHotkey) {
-      await commandsApi.update({ name: 'toggle-overlay', shortcut: targetHotkey });
+      await commandsApi.update({ name: 'toggle-overlay', shortcut: targetHotkey }).catch(() => {});
+    }
+    if (targetLiveHotkey) {
+      await commandsApi.update({ name: 'toggle-live-search', shortcut: targetLiveHotkey }).catch(() => {});
     }
   } catch {
     // Ignore if shortcut format is unsupported by browser.commands.update
@@ -171,8 +170,8 @@ browser.storage.onChanged.addListener((changes, area) => {
     if (newSettings?.indexTrigger || newSettings?.language) {
       updateContextMenu(newSettings.indexTrigger, newSettings.language).catch(console.warn);
     }
-    if (newSettings?.hotkey) {
-      void syncBrowserCommandShortcut(newSettings.hotkey);
+    if (newSettings?.hotkey || newSettings?.liveSearchHotkey) {
+      void syncBrowserCommandShortcut(newSettings.hotkey, newSettings.liveSearchHotkey);
     }
   }
 });
@@ -267,95 +266,69 @@ browser.alarms.onAlarm.addListener(async (alarm) => {
   }
 });
 
-// Open search window on keyboard shortcut
+async function openSearchInTab(): Promise<void> {
+  const searchUrl = browser.runtime.getURL('search.html');
+  try {
+    const tabs = await browser.tabs.query({ currentWindow: true });
+    const existing = tabs.find((t) => t.url && t.url.includes('search.html'));
+    if (existing?.id) {
+      await browser.tabs.update(existing.id, { active: true });
+      return;
+    }
+    await browser.tabs.create({ url: searchUrl, active: true });
+  } catch (err) {
+    console.error('[PageTrace] Failed to open search tab:', err);
+  }
+}
+
+async function toggleOverlayOrOpenTab(mode?: 'global' | 'page'): Promise<void> {
+  try {
+    const tabs = await browser.tabs.query({ active: true, currentWindow: true });
+    const activeTab = tabs[0];
+    if (
+      activeTab?.id &&
+      activeTab.url &&
+      !activeTab.url.startsWith('about:') &&
+      !activeTab.url.startsWith('chrome:') &&
+      !activeTab.url.startsWith('chrome-extension:') &&
+      !activeTab.url.startsWith('edge:') &&
+      !activeTab.url.startsWith('moz-extension:') &&
+      !activeTab.url.startsWith('view-source:')
+    ) {
+      await browser.tabs.sendMessage(activeTab.id, { type: 'TOGGLE_OVERLAY', mode });
+      return;
+    }
+  } catch (err) {
+    console.warn('[PageTrace] Could not toggle in-page overlay:', err);
+  }
+  if (mode !== 'page') {
+    await openSearchInTab();
+  }
+}
+
 browser.commands.onCommand.addListener(async (command) => {
+  const settings = await getSettings();
+  if (!settings.enabled) return;
   if (command === 'toggle-overlay') {
-    const settings = await getSettings();
-    if (!settings.enabled) return;
-    await openSearchWindow();
+    await toggleOverlayOrOpenTab('global');
+  } else if (command === 'toggle-live-search') {
+    await toggleOverlayOrOpenTab('page');
   }
 });
-
-let openSearchPromise: Promise<void> | null = null;
-let lastOpenSearchTime = 0;
-
-async function openSearchWindow(): Promise<void> {
-  const now = Date.now();
-  if (now - lastOpenSearchTime < 250) {
-    return;
-  }
-  if (openSearchPromise) {
-    return openSearchPromise;
-  }
-  lastOpenSearchTime = now;
-
-  openSearchPromise = (async () => {
-    const width = 680;
-    const height = 580;
-
-    try {
-      // Focus existing search window if already open
-      const allWindows = await browser.windows.getAll({ populate: true });
-      for (const win of allWindows) {
-        if (win.tabs?.some((t) => t.url && t.url.includes('search.html'))) {
-          await browser.windows.update(win.id!, { focused: true });
-          return;
-        }
-      }
-    } catch (err) {
-      console.warn('[PageTrace] Could not check existing windows:', err);
-    }
-
-    // Center popup relative to the last focused browser window
-    let left: number | undefined;
-    let top: number | undefined;
-
-    try {
-      const lastFocused = await browser.windows.getLastFocused();
-      if (lastFocused && lastFocused.width && lastFocused.height) {
-        const winLeft = lastFocused.left ?? 0;
-        const winTop = lastFocused.top ?? 0;
-        left = Math.max(0, Math.round(winLeft + (lastFocused.width - width) / 2));
-        top = Math.max(0, Math.round(winTop + (lastFocused.height - height) / 2));
-      }
-    } catch (err) {
-      console.warn('[PageTrace] Could not determine last focused window coordinates:', err);
-    }
-
-    const searchUrl = browser.runtime.getURL('search.html');
-
-    try {
-      await browser.windows.create({
-        url: searchUrl,
-        type: 'popup',
-        width,
-        height,
-        left,
-        top,
-        focused: true,
-      });
-    } catch (err) {
-      console.error('[PageTrace] Failed to create popup window, opening in tab:', err);
-      try {
-        await browser.tabs.create({ url: searchUrl, active: true });
-      } catch {
-        // ignore
-      }
-    }
-  })().finally(() => {
-    openSearchPromise = null;
-  });
-
-  return openSearchPromise;
-}
 
 // Handle messages from content scripts and UI views
 browser.runtime.onMessage.addListener(
   (rawMessage: unknown, sender: Runtime.MessageSender): Promise<unknown> | true | undefined => {
-    const message = rawMessage as ExtensionMessage | { type: string };
+    const message = rawMessage as ExtensionMessage;
 
-    if (message.type === 'OPEN_SEARCH_WINDOW') {
-      openSearchWindow().catch((e) => console.error(e));
+    if (message.type === 'OPEN_SEARCH_WINDOW' || message.type === 'TOGGLE_OVERLAY') {
+      const mode = message.mode;
+      toggleOverlayOrOpenTab(mode).catch((e) => console.error(e));
+      return undefined;
+    }
+
+    if (message.type === 'OPEN_SEARCH_TAB') {
+      openSearchInTab().catch((e) => console.error(e));
       return undefined;
     }
 
@@ -382,20 +355,18 @@ browser.runtime.onMessage.addListener(
     }
 
     if (message.type === 'NAVIGATE_TO_RESULT') {
-      handleNavigateToResult(message as NavigateToResultMessage).catch((e) => {
+      return handleNavigateToResult(message as NavigateToResultMessage).catch((e) => {
         console.error('[PageTrace] Navigate to result error:', e);
       });
-      return true;
     }
 
     if (message.type === 'INDEX_PAGE') {
       if (sender.tab?.incognito) {
         return undefined;
       }
-      handleIndexPage(message as IndexPageMessage).catch((e) => {
+      return handleIndexPage(message as IndexPageMessage).catch((e) => {
         console.error('[PageTrace] Index error:', e);
       });
-      return true;
     }
 
     if (message.type === 'SAVE_CUSTOM_INDEX') {
@@ -436,19 +407,18 @@ browser.runtime.onMessage.addListener(
 
     if (message.type === 'DELETE_CUSTOM_INDEX') {
       const msg = message as DeleteCustomIndexMessage;
-      deleteCustomIndex(msg.id)
+      return deleteCustomIndex(msg.id)
         .then(() => {
           scheduleSearchCachePersist();
         })
         .catch((e) => {
           console.error('[PageTrace] Delete custom index error:', e);
         });
-      return true;
     }
 
     if (message.type === 'DELETE_PAGE') {
       const msg = message as DeletePageMessage;
-      (async () => {
+      return (async () => {
         if (msg.pageId !== undefined) {
           await deletePageById(msg.pageId);
         } else if (msg.url) {
@@ -458,7 +428,23 @@ browser.runtime.onMessage.addListener(
       })().catch((e) => {
         console.error('[PageTrace] Delete page error:', e);
       });
-      return true;
+    }
+
+    if (message.type === 'ENSURE_OVERLAY_INJECTED') {
+      const tabId = sender.tab?.id;
+      if (tabId) {
+        return browser.scripting
+          .executeScript({
+            target: { tabId },
+            files: ['overlay.js'],
+          })
+          .then(() => ({ success: true }))
+          .catch((err) => {
+            console.error('[PageTrace] Error injecting overlay.js:', err);
+            return { success: false, error: String(err) };
+          });
+      }
+      return Promise.resolve({ success: false, error: 'No sender tab' });
     }
 
     if (message.type === 'GET_SEARCH_SUGGESTIONS') {
@@ -487,10 +473,23 @@ async function handleNavigateToResult(msg: NavigateToResultMessage): Promise<voi
 
   // Check if a tab with this URL is already open
   try {
-    const tabs = await browser.tabs.query({});
-    const existingTab = tabs.find(
-      (t) => t.id && t.url && normalizePageUrl(t.url) === targetNormalized,
-    );
+    let existingTab: browser.Tabs.Tab | undefined;
+    try {
+      const parsedUrl = new URL(url);
+      if (parsedUrl.protocol === 'http:' || parsedUrl.protocol === 'https:') {
+        const candidateTabs = await browser.tabs.query({ url: `${parsedUrl.origin}/*` });
+        existingTab = candidateTabs.find(
+          (t) => t.id && t.url && normalizePageUrl(t.url) === targetNormalized,
+        );
+      }
+    } catch {}
+
+    if (!existingTab) {
+      const tabs = await browser.tabs.query({});
+      existingTab = tabs.find(
+        (t) => t.id && t.url && normalizePageUrl(t.url) === targetNormalized,
+      );
+    }
 
     if (existingTab?.id) {
       if (existingTab.windowId !== undefined) {
@@ -550,11 +549,18 @@ function waitForTabAndScroll(tabId: number, text: string, selector: string): voi
   const cleanup = (): void => {
     if (done) return;
     done = true;
-    browser.tabs.onUpdated.removeListener(listener);
+    browser.tabs.onUpdated.removeListener(updateListener);
+    browser.tabs.onRemoved.removeListener(removeListener);
     clearTimeout(timeoutId);
   };
 
-  const listener = (updatedTabId: number, changeInfo: { status?: string }): void => {
+  const removeListener = (closedTabId: number): void => {
+    if (closedTabId === tabId) {
+      cleanup();
+    }
+  };
+
+  const updateListener = (updatedTabId: number, changeInfo: { status?: string }): void => {
     if (updatedTabId === tabId && changeInfo.status === 'complete') {
       cleanup();
       setTimeout(() => {
@@ -572,7 +578,8 @@ function waitForTabAndScroll(tabId: number, text: string, selector: string): voi
   };
 
   const timeoutId = setTimeout(cleanup, 20000);
-  browser.tabs.onUpdated.addListener(listener);
+  browser.tabs.onUpdated.addListener(updateListener);
+  browser.tabs.onRemoved.addListener(removeListener);
 }
 
 async function isIndexingPaused(): Promise<boolean> {
@@ -613,6 +620,7 @@ async function handleIndexPage(msg: IndexPageMessage): Promise<void> {
     msg.favicon,
     msg.chunks,
     settings.indexMedia ? msg.media : [],
+    settings.autoTagRules,
   );
   scheduleSearchCachePersist();
 }

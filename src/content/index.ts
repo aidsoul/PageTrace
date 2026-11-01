@@ -3,7 +3,7 @@ import type { IndexDepth, IndexPageMessage, MediaItem, SiteTagRule, TextChunk, U
 import { getLocale, DEFAULT_LANGUAGE } from '@/i18n/index';
 import { setSafeHtml, matchUrlPattern } from '@/common/tags';
 import { getSettings, matchesHotkey } from '@/common/settings';
-import { initOverlayInShadow, showOverlayInShadow } from '@/overlay/index';
+import { normalizeIndexedText as normalizeSearchText } from '@/common/search-utils';
 
 // Content script: DOM parser, indexer, and in-page UI
 
@@ -44,7 +44,8 @@ function normalizeContentUrl(rawUrl: string): string {
 browser.runtime.onMessage.addListener((rawMsg: unknown) => {
   const msg = rawMsg as { type: string };
   if (msg.type === 'TOGGLE_OVERLAY') {
-    toggleOverlay();
+    const { mode } = rawMsg as { type: string; mode?: 'global' | 'page' };
+    toggleOverlay(mode);
   }
   if (msg.type === 'SCROLL_TO') {
     const { text, selector } = rawMsg as { type: string; text: string; selector: string };
@@ -88,12 +89,14 @@ window.addEventListener('pt:navigate', (e: Event) => {
 
 // Custom hotkey listener
 let cachedHotkey = 'Alt+Shift+F';
+let cachedLiveHotkey = 'Alt+Shift+L';
 let cachedEnabled = true;
 
 async function syncHotkeySetting(): Promise<void> {
   try {
     const s = await getSettings();
     if (s.hotkey) cachedHotkey = s.hotkey;
+    if (s.liveSearchHotkey) cachedLiveHotkey = s.liveSearchHotkey;
     if (typeof s.enabled === 'boolean') cachedEnabled = s.enabled;
   } catch {}
 }
@@ -103,6 +106,7 @@ browser.storage.onChanged.addListener((changes, area) => {
   if (area === 'sync' && changes['settings']) {
     const s = changes['settings'].newValue as Partial<UserSettings> | undefined;
     if (s?.hotkey) cachedHotkey = s.hotkey;
+    if (s?.liveSearchHotkey) cachedLiveHotkey = s.liveSearchHotkey;
     if (typeof s?.enabled === 'boolean') cachedEnabled = s.enabled;
   }
 });
@@ -114,21 +118,41 @@ function isEditableEventTarget(target: EventTarget | null): boolean {
     tag === 'input' ||
     tag === 'textarea' ||
     tag === 'select' ||
-    target.isContentEditable
+    target.isContentEditable ||
+    Boolean(target.closest('[contenteditable="true"]'))
   );
 }
 
 window.addEventListener(
   'keydown',
   (e: KeyboardEvent) => {
-    if (!cachedEnabled || !cachedHotkey) return;
+    if (!cachedEnabled) return;
+    const host = document.getElementById('pagetrace-overlay-host');
+    const isInsideOverlay = Boolean(host && e.composedPath().includes(host));
+    const isOverlayOpen = Boolean(host && host.style.display !== 'none');
+    if (e.key === 'Escape' && isOverlayOpen && !isInsideOverlay) {
+      e.preventDefault();
+      e.stopPropagation();
+      const closeFn = (window as unknown as Record<string, unknown>).__pt_close_overlay as
+        | (() => void)
+        | undefined;
+      closeFn?.();
+      return;
+    }
     if (!e.altKey && !e.ctrlKey && !e.metaKey && isEditableEventTarget(e.target)) {
       return;
     }
-    if (matchesHotkey(e, cachedHotkey)) {
+    if (cachedLiveHotkey && matchesHotkey(e, cachedLiveHotkey)) {
       e.preventDefault();
       e.stopPropagation();
-      browser.runtime.sendMessage({ type: 'OPEN_SEARCH_WINDOW' }).catch(() => {});
+      toggleOverlay('page');
+      return;
+    }
+    if (cachedHotkey && matchesHotkey(e, cachedHotkey)) {
+      e.preventDefault();
+      e.stopPropagation();
+      toggleOverlay('global');
+      return;
     }
   },
   true,
@@ -137,6 +161,10 @@ window.addEventListener(
 function scheduleParseIfChanged(): void {
   const currentUrl = normalizeContentUrl(location.href);
   const isNewUrl = currentUrl !== lastParsedUrl;
+
+  if (isNewUrl) {
+    resetDomCaches();
+  }
 
   if (hasIndexed && !isNewUrl && pendingAddedNodes < 15) {
     return;
@@ -147,7 +175,16 @@ function scheduleParseIfChanged(): void {
 
 const observer = new MutationObserver((mutations) => {
   for (let i = 0; i < mutations.length; i++) {
-    pendingAddedNodes += mutations[i]!.addedNodes.length;
+    const m = mutations[i]!;
+    for (let j = 0; j < m.addedNodes.length; j++) {
+      const node = m.addedNodes[j]!;
+      if (node.nodeType === Node.ELEMENT_NODE) {
+        const tag = (node as Element).tagName;
+        if (tag !== 'SCRIPT' && tag !== 'STYLE' && tag !== 'SVG' && tag !== 'NOSCRIPT') {
+          pendingAddedNodes++;
+        }
+      }
+    }
   }
   const now = Date.now();
   if (now - mutationLastRun < THROTTLE_MS) {
@@ -283,26 +320,55 @@ function extractPageMeta(): Omit<TextChunk, 'id' | 'pageId' | 'createdAt'>[] {
 }
 
 const NOISE_CLASS_ID_REGEX = /cookie|consent|banner-ad|advertisement|sidebar-menu|popup-modal|popup-overlay/i;
+let noiseCheckCache = new WeakMap<Element, boolean>();
+let hiddenCheckCache = new WeakMap<Element, boolean>();
+
+function resetDomCaches(): void {
+  noiseCheckCache = new WeakMap<Element, boolean>();
+  hiddenCheckCache = new WeakMap<Element, boolean>();
+}
 
 function isBoilerplateOrNoise(el: Element): boolean {
+  const cached = noiseCheckCache.get(el);
+  if (cached !== undefined) return cached;
+
+  if (el.parentElement) {
+    const parentNoise = noiseCheckCache.get(el.parentElement);
+    if (parentNoise === true) {
+      noiseCheckCache.set(el, true);
+      return true;
+    }
+  }
+
   const noiseContainer = el.closest(
     'header, footer, nav, aside, dialog, [role="navigation"], [role="banner"], [role="contentinfo"], [role="dialog"], [aria-modal="true"]',
   );
-  if (noiseContainer) return true;
+  if (noiseContainer) {
+    noiseCheckCache.set(el, true);
+    return true;
+  }
 
   let current: Element | null = el;
   let depth = 0;
+  let isNoise = false;
   while (current && current !== document.body && depth < 4) {
+    const parentCached = noiseCheckCache.get(current);
+    if (parentCached !== undefined) {
+      isNoise = parentCached;
+      break;
+    }
     const cls = typeof current.className === 'string' ? current.className : '';
     const id = current.id || '';
     if ((cls || id) && NOISE_CLASS_ID_REGEX.test(`${cls} ${id}`)) {
-      return true;
+      isNoise = true;
+      break;
     }
     current = current.parentElement;
     depth++;
   }
 
-  return false;
+  noiseCheckCache.set(el, isNoise);
+  return isNoise;
 }
 
 function getMatchingSiteTags(url: string, siteRules: SiteTagRule[] = []): string | null {
@@ -434,11 +500,15 @@ function extractTextChunks(
       pushUniqueChunk(el, text, level);
     });
 
-    const primaryContainers = Array.from(
+    const rawContainers = Array.from(
       document.querySelectorAll<HTMLElement>(
         'article, main, [role="main"], [role="article"], .content, .post-content, .article-content, .entry-content, .markdown-body, #content, #main',
       ),
     ).filter((c) => !isHidden(c) && !isBoilerplateOrNoise(c));
+
+    const primaryContainers = rawContainers.filter(
+      (c) => !rawContainers.some((other) => other !== c && other.contains(c)),
+    );
 
     const contentTargets = primaryContainers.length > 0 ? primaryContainers : [document.body];
 
@@ -590,10 +660,6 @@ function extractMedia(
 }
 
 // Scroll and highlight matched text on page
-function normalizeSearchText(s: string): string {
-  return s.replace(/\s+/g, ' ').trim().toLowerCase();
-}
-
 function ensureHighlightStyles(): void {
   if (document.getElementById('pagetrace-highlight-styles')) return;
   const style = document.createElement('style');
@@ -601,6 +667,10 @@ function ensureHighlightStyles(): void {
   style.textContent = `
     ::highlight(pagetrace-match) {
       background-color: #FDE047;
+      color: #0F172A;
+    }
+    ::highlight(pagetrace-match-active) {
+      background-color: #FB923C;
       color: #0F172A;
     }
     @keyframes pt-target-pulse {
@@ -620,6 +690,18 @@ function ensureHighlightStyles(): void {
     .pt-scroll-target-flash {
       border-radius: 4px;
       animation: pt-target-pulse 3.2s cubic-bezier(0.16, 1, 0.3, 1) forwards !important;
+    }
+    .pt-fallback-match {
+      outline: 2px solid #FDE047 !important;
+      outline-offset: 1px !important;
+      background-color: rgba(253, 224, 71, 0.2) !important;
+      border-radius: 2px;
+    }
+    .pt-fallback-match-active {
+      outline: 2px solid #FB923C !important;
+      outline-offset: 2px !important;
+      background-color: rgba(251, 146, 60, 0.35) !important;
+      border-radius: 2px;
     }
   `;
   (document.head || document.documentElement).appendChild(style);
@@ -657,39 +739,55 @@ function findTargetElement(text: string, selector: string): HTMLElement | null {
 
   if (needles.length === 0) return null;
 
-  // Search text nodes with TreeWalker with whitespace normalization
-  for (const needle of needles) {
-    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-    let node: Text | null;
-    while ((node = walker.nextNode() as Text | null)) {
-      const parent = node.parentElement;
-      if (!parent || isScriptLike(parent) || isHidden(parent)) continue;
-      if (normalizeSearchText(node.textContent ?? '').includes(needle)) {
-        return parent;
+  // Single-pass TreeWalker matching from longest needle to shortest
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  let node: Text | null;
+  let fallbackMatchByNeedle: HTMLElement | null = null;
+  let bestMatchedNeedleIdx = needles.length;
+
+  while ((node = walker.nextNode() as Text | null)) {
+    const parent = node.parentElement;
+    if (!parent || isScriptLike(parent) || isHidden(parent)) continue;
+    const nodeText = normalizeSearchText(node.textContent ?? '');
+    if (!nodeText) continue;
+
+    for (let i = 0; i < bestMatchedNeedleIdx; i++) {
+      if (nodeText.includes(needles[i]!)) {
+        bestMatchedNeedleIdx = i;
+        fallbackMatchByNeedle = parent;
+        if (i === 0) return parent;
+        break;
       }
     }
   }
 
-  // Fallback: search block and inline elements whose normalized textContent matches
-  for (const needle of needles) {
-    let bestMatch: HTMLElement | null = null;
-    let bestLen = Infinity;
+  if (fallbackMatchByNeedle) return fallbackMatchByNeedle;
 
-    const elements = document.body.querySelectorAll<HTMLElement>(
-      'h1, h2, h3, h4, h5, h6, p, li, blockquote, td, th, pre, code, dd, dt, summary, article, section, div, span, a',
-    );
-    for (let i = 0; i < elements.length; i++) {
-      const el = elements[i]!;
-      if (isScriptLike(el) || isHidden(el)) continue;
-      const elNorm = normalizeSearchText(el.textContent ?? '');
-      if (elNorm.includes(needle) && elNorm.length < bestLen) {
-        bestMatch = el;
-        bestLen = elNorm.length;
+  // Single-pass fallback: check candidate block/inline elements
+  const elements = document.body.querySelectorAll<HTMLElement>(
+    'h1, h2, h3, h4, h5, h6, p, li, blockquote, td, th, pre, code, dd, dt, summary, article, section, div, span, a',
+  );
+  let bestMatch: HTMLElement | null = null;
+  let bestLen = Infinity;
+
+  for (let i = 0; i < elements.length; i++) {
+    const el = elements[i]!;
+    if (isScriptLike(el) || isHidden(el)) continue;
+    const elNorm = normalizeSearchText(el.textContent ?? '');
+    if (!elNorm) continue;
+
+    for (const needle of needles) {
+      if (elNorm.includes(needle)) {
+        if (elNorm.length < bestLen) {
+          bestMatch = el;
+          bestLen = elNorm.length;
+        }
+        break;
       }
     }
-
-    if (bestMatch) return bestMatch;
   }
+
+  if (bestMatch) return bestMatch;
 
   // For meta description matches, scroll to top h1 or body
   if (selector && selector.startsWith('meta[')) {
@@ -699,14 +797,29 @@ function findTargetElement(text: string, selector: string): HTMLElement | null {
   return null;
 }
 
-export async function scrollAndHighlight(text: string, selector: string, attempt = 0): Promise<void> {
+let latestScrollToken = 0;
+
+export async function scrollAndHighlight(
+  text: string,
+  selector: string,
+  attempt = 0,
+  token?: number,
+): Promise<void> {
+  if (attempt === 0) {
+    token = ++latestScrollToken;
+  } else if (token !== latestScrollToken) {
+    return;
+  }
+
   const target = findTargetElement(text, selector);
 
   if (!target) {
     // Retry for dynamically rendered SPA content
     if (attempt < 10) {
       setTimeout(() => {
-        void scrollAndHighlight(text, selector, attempt + 1);
+        if (token === latestScrollToken) {
+          void scrollAndHighlight(text, selector, attempt + 1, token);
+        }
       }, 300);
       return;
     }
@@ -831,34 +944,38 @@ function showToast(message: string): void {
 }
 
 // Overlay toggle in Shadow DOM
-let overlayLoaded = false;
+let lastToggleTime = 0;
 
-function toggleOverlay(): void {
-  if (!overlayLoaded) {
-    injectOverlay();
+function toggleOverlay(targetMode?: 'global' | 'page'): void {
+  const now = Date.now();
+  if (now - lastToggleTime < 300) {
     return;
   }
-  const host = document.getElementById('pagetrace-overlay-host');
-  if (host) {
-    const isHiddenNow = host.style.display === 'none';
-    host.style.display = isHiddenNow ? 'block' : 'none';
-    if (isHiddenNow) {
-      void showOverlayInShadow();
-    }
+  lastToggleTime = now;
+
+  const toggleFn = (window as unknown as Record<string, unknown>).__pt_toggle_overlay as
+    | ((mode?: 'global' | 'page') => void)
+    | undefined;
+
+  if (typeof toggleFn === 'function') {
+    toggleFn(targetMode);
+    return;
   }
-}
 
-function injectOverlay(): void {
-  overlayLoaded = true;
-
-  const host = document.createElement('div');
-  host.id = 'pagetrace-overlay-host';
-  host.style.cssText = 'all: initial; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 2147483647; pointer-events: none;';
-  document.documentElement.appendChild(host);
-
-  const shadow = host.attachShadow({ mode: 'open' });
   ensureHighlightStyles();
-  void initOverlayInShadow(shadow);
+  browser.runtime
+    .sendMessage({ type: 'ENSURE_OVERLAY_INJECTED' })
+    .then(() => {
+      const fn = (window as unknown as Record<string, unknown>).__pt_toggle_overlay as
+        | ((mode?: 'global' | 'page') => void)
+        | undefined;
+      if (typeof fn === 'function') {
+        fn(targetMode);
+      }
+    })
+    .catch((err) => {
+      console.warn('[PageTrace] Failed to load overlay bundle:', err);
+    });
 }
 
 // DOM utility helpers
@@ -866,19 +983,32 @@ function isHidden(el: Element): boolean {
   if ((el as HTMLElement).hidden === true || el.getAttribute('aria-hidden') === 'true') {
     return true;
   }
-  // Fast native C++ visibility check supported in modern Chrome & Firefox
+  const cached = hiddenCheckCache.get(el);
+  if (cached !== undefined) return cached;
+
+  if (el.parentElement) {
+    const parentHidden = hiddenCheckCache.get(el.parentElement);
+    if (parentHidden === true) {
+      hiddenCheckCache.set(el, true);
+      return true;
+    }
+  }
+
+  let hidden = false;
   if ('checkVisibility' in el && typeof (el as HTMLElement).checkVisibility === 'function') {
-    return !(el as HTMLElement).checkVisibility({
+    hidden = !(el as HTMLElement).checkVisibility({
       checkOpacity: true,
       checkVisibilityCSS: true,
     });
+  } else {
+    const style = getComputedStyle(el);
+    hidden =
+      style.display === 'none' ||
+      style.visibility === 'hidden' ||
+      style.opacity === '0';
   }
-  const style = getComputedStyle(el);
-  return (
-    style.display === 'none' ||
-    style.visibility === 'hidden' ||
-    style.opacity === '0'
-  );
+  hiddenCheckCache.set(el, hidden);
+  return hidden;
 }
 
 function isInteractive(el: Element): boolean {
@@ -980,14 +1110,29 @@ function getCSSSelector(el: Element): string {
 function initSelectionIndexingWatcher(): void {
   if (isIncognito()) return;
 
-  const host = document.createElement('div');
-  host.id = 'pagetrace-selection-host';
-  host.style.cssText = 'all: initial; position: fixed; top: 0; left: 0; width: 0; height: 0; z-index: 2147483646; pointer-events: none;';
-  document.documentElement.appendChild(host);
+  let host: HTMLDivElement | null = null;
+  let shadow: ShadowRoot | null = null;
+  let wrapper: HTMLDivElement | null = null;
+  let pillBtn: HTMLButtonElement | null = null;
+  let popoverCard: HTMLElement | null = null;
+  let closeBtn: HTMLButtonElement | null = null;
+  let cancelBtn: HTMLButtonElement | null = null;
+  let saveBtn: HTMLButtonElement | null = null;
+  let snippetQuote: HTMLElement | null = null;
+  let indexNameInput: HTMLInputElement | null = null;
+  let indexNoteInput: HTMLTextAreaElement | null = null;
 
-  const shadow = host.attachShadow({ mode: 'open' });
+  function ensureSelectionWidgetDom(): void {
+    if (host) return;
 
-  const style = document.createElement('style');
+    host = document.createElement('div');
+    host.id = 'pagetrace-selection-host';
+    host.style.cssText = 'all: initial; position: fixed; top: 0; left: 0; width: 0; height: 0; z-index: 2147483646; pointer-events: none;';
+    document.documentElement.appendChild(host);
+
+    shadow = host.attachShadow({ mode: 'open' });
+
+    const style = document.createElement('style');
   style.textContent = `
     * {
       box-sizing: border-box;
@@ -1201,7 +1346,7 @@ function initSelectionIndexingWatcher(): void {
   `;
   shadow.appendChild(style);
 
-  const wrapper = document.createElement('div');
+  wrapper = document.createElement('div');
   wrapper.className = 'pt-selection-wrapper';
 
   setSafeHtml(
@@ -1234,16 +1379,58 @@ function initSelectionIndexingWatcher(): void {
     </div>
   `,
   );
-  shadow.appendChild(wrapper);
+    shadow.appendChild(wrapper);
 
-  const pillBtn = shadow.getElementById('ptPillBtn') as HTMLButtonElement;
-  const popoverCard = shadow.getElementById('ptPopoverCard') as HTMLElement;
-  const closeBtn = shadow.getElementById('ptCloseBtn') as HTMLButtonElement;
-  const cancelBtn = shadow.getElementById('ptCancelBtn') as HTMLButtonElement;
-  const saveBtn = shadow.getElementById('ptSaveBtn') as HTMLButtonElement;
-  const snippetQuote = shadow.getElementById('ptSnippetQuote') as HTMLElement;
-  const indexNameInput = shadow.getElementById('ptIndexName') as HTMLInputElement;
-  const indexNoteInput = shadow.getElementById('ptIndexNote') as HTMLTextAreaElement;
+    pillBtn = shadow.getElementById('ptPillBtn') as HTMLButtonElement;
+    popoverCard = shadow.getElementById('ptPopoverCard') as HTMLElement;
+    closeBtn = shadow.getElementById('ptCloseBtn') as HTMLButtonElement;
+    cancelBtn = shadow.getElementById('ptCancelBtn') as HTMLButtonElement;
+    saveBtn = shadow.getElementById('ptSaveBtn') as HTMLButtonElement;
+    snippetQuote = shadow.getElementById('ptSnippetQuote') as HTMLElement;
+    indexNameInput = shadow.getElementById('ptIndexName') as HTMLInputElement;
+    indexNoteInput = shadow.getElementById('ptIndexNote') as HTMLTextAreaElement;
+
+    pillBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      showPopoverCard(currentSelectedText, currentTargetElement, currentRange);
+    });
+
+    saveBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      void saveCurrentIndex();
+    });
+
+    indexNameInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        void saveCurrentIndex();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        hideWidget();
+      }
+    });
+
+    indexNoteInput.addEventListener('keydown', (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+        e.preventDefault();
+        void saveCurrentIndex();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        hideWidget();
+      }
+    });
+
+    closeBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      hideWidget();
+    });
+
+    cancelBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      hideWidget();
+    });
+  }
 
   let currentSelectedText = '';
   let currentTargetElement: HTMLElement | null = null;
@@ -1270,9 +1457,9 @@ function initSelectionIndexingWatcher(): void {
   }
 
   function hideWidget(): void {
-    wrapper.style.display = 'none';
-    pillBtn.style.display = 'none';
-    popoverCard.style.display = 'none';
+    if (wrapper) wrapper.style.display = 'none';
+    if (pillBtn) pillBtn.style.display = 'none';
+    if (popoverCard) popoverCard.style.display = 'none';
     isPopoverOpen = false;
     currentSelectedText = '';
     currentTargetElement = null;
@@ -1281,6 +1468,9 @@ function initSelectionIndexingWatcher(): void {
 
   function showPopoverCard(text: string, element: HTMLElement | null, range: Range | null): void {
     if (!text) return;
+
+    ensureSelectionWidgetDom();
+    if (!wrapper || !pillBtn || !popoverCard || !snippetQuote || !indexNameInput) return;
 
     currentSelectedText = text;
     currentTargetElement = element;
@@ -1330,12 +1520,12 @@ function initSelectionIndexingWatcher(): void {
     wrapper.style.left = `${popLeft}px`;
 
     setTimeout(() => {
-      indexNameInput.focus();
+      indexNameInput?.focus();
     }, 50);
   }
 
   async function saveCurrentIndex(): Promise<void> {
-    if (!currentSelectedText) return;
+    if (!currentSelectedText || !indexNameInput) return;
 
     const selectedText = currentSelectedText;
     const targetElement = currentTargetElement;
@@ -1378,12 +1568,6 @@ function initSelectionIndexingWatcher(): void {
     }
   }
 
-  pillBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    e.preventDefault();
-    showPopoverCard(currentSelectedText, currentTargetElement, currentRange);
-  });
-
   // Triggered from the right-click context menu
   window.addEventListener('pt:trigger-create-index', async (e) => {
     try {
@@ -1392,7 +1576,6 @@ function initSelectionIndexingWatcher(): void {
         currentLang = settings.language;
       }
     } catch {}
-    updateWidgetText();
 
     const detail = (e as CustomEvent).detail as { text?: string };
     const sel = window.getSelection();
@@ -1421,67 +1604,52 @@ function initSelectionIndexingWatcher(): void {
     }
   });
 
-  saveBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    void saveCurrentIndex();
-  });
-
-  indexNameInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      void saveCurrentIndex();
-    } else if (e.key === 'Escape') {
-      e.preventDefault();
-      hideWidget();
-    }
-  });
-
-  indexNoteInput.addEventListener('keydown', (e) => {
-    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-      e.preventDefault();
-      void saveCurrentIndex();
-    } else if (e.key === 'Escape') {
-      e.preventDefault();
-      hideWidget();
-    }
-  });
-
-  closeBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    hideWidget();
-  });
-
-  cancelBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    hideWidget();
-  });
-
   document.addEventListener('mousedown', (e) => {
-    const path = e.composedPath();
-    if (path.includes(host)) return;
-    if (isPopoverOpen || wrapper.style.display === 'block') {
+    if (host) {
+      const path = e.composedPath();
+      if (path.includes(host)) return;
+    }
+    if (isPopoverOpen || (wrapper && wrapper.style.display === 'block')) {
       hideWidget();
     }
   });
 
   window.addEventListener('scroll', () => {
-    if (!isPopoverOpen && wrapper.style.display === 'block') {
+    if (!isPopoverOpen && wrapper && wrapper.style.display === 'block') {
       hideWidget();
     }
   }, { passive: true });
 
   document.addEventListener('mouseup', () => {
+    if (isPopoverOpen) return;
+
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || sel.rangeCount === 0) {
+      if (wrapper && wrapper.style.display === 'block') {
+        hideWidget();
+      }
+      return;
+    }
+
+    const text = sel.toString().trim();
+    if (text.length < 2) {
+      if (wrapper && wrapper.style.display === 'block') {
+        hideWidget();
+      }
+      return;
+    }
+
     setTimeout(async () => {
       if (isPopoverOpen) return;
 
-      const sel = window.getSelection();
-      if (!sel || sel.isCollapsed || sel.rangeCount === 0) {
+      const activeSel = window.getSelection();
+      if (!activeSel || activeSel.isCollapsed || activeSel.rangeCount === 0) {
         hideWidget();
         return;
       }
 
-      const text = sel.toString().trim();
-      if (text.length < 2) {
+      const activeText = activeSel.toString().trim();
+      if (activeText.length < 2) {
         hideWidget();
         return;
       }
@@ -1497,13 +1665,9 @@ function initSelectionIndexingWatcher(): void {
         if (trigger === 'contextmenu') {
           return;
         }
-      } catch {
-        // Continue if storage query fails
-      }
-      updateWidgetText();
+      } catch {}
 
-      // Ignore selections inside inputs or extension overlays
-      const range = sel.getRangeAt(0);
+      const range = activeSel.getRangeAt(0);
       const container = range.commonAncestorContainer;
       const parentEl = (container.nodeType === Node.ELEMENT_NODE
         ? (container as Element)
@@ -1512,7 +1676,7 @@ function initSelectionIndexingWatcher(): void {
       if (!parentEl) return;
       if (
         parentEl.closest('#pagetrace-overlay-host') ||
-        parentEl.closest('#pagetrace-selection-host') ||
+        (host && parentEl.closest('#pagetrace-selection-host')) ||
         parentEl.closest('input, textarea, select, button, [contenteditable="true"]')
       ) {
         return;
@@ -1521,7 +1685,11 @@ function initSelectionIndexingWatcher(): void {
       const rect = range.getBoundingClientRect();
       if (rect.width === 0 && rect.height === 0) return;
 
-      currentSelectedText = text;
+      ensureSelectionWidgetDom();
+      updateWidgetText();
+      if (!wrapper || !pillBtn || !popoverCard) return;
+
+      currentSelectedText = activeText;
       currentTargetElement = parentEl;
       currentRange = range.cloneRange();
 

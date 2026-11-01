@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest';
+import { matchesHotkey } from '@/common/settings';
+import { DEFAULT_SETTINGS } from '@/types/index';
 import {
   normalizeTagName,
   matchUrlPattern,
@@ -329,6 +331,44 @@ describe('Search utilities and inline query operators', () => {
     const operatorToken = getAutocompleteTokenInfo('af', 2);
     const opSuggestions = generateSearchSuggestions(operatorToken!, [], []);
     expect(opSuggestions.some((s) => s.label === 'after:')).toBe(true);
+  });
+
+  it('validates default hotkey settings and matches hotkey combos accurately', () => {
+    expect(DEFAULT_SETTINGS.hotkey).toBe('Alt+Shift+F');
+    expect(DEFAULT_SETTINGS.liveSearchHotkey).toBe('Alt+Shift+L');
+
+    const altShiftL = {
+      key: 'L',
+      code: 'KeyL',
+      altKey: true,
+      shiftKey: true,
+      ctrlKey: false,
+      metaKey: false,
+    } as KeyboardEvent;
+    expect(matchesHotkey(altShiftL, 'Alt+Shift+L')).toBe(true);
+    expect(matchesHotkey(altShiftL, 'Alt+Shift+F')).toBe(false);
+
+    const altShiftF = {
+      key: 'F',
+      code: 'KeyF',
+      altKey: true,
+      shiftKey: true,
+      ctrlKey: false,
+      metaKey: false,
+    } as KeyboardEvent;
+    expect(matchesHotkey(altShiftF, 'Alt+Shift+F')).toBe(true);
+    expect(matchesHotkey(altShiftF, 'Alt+Shift+L')).toBe(false);
+
+    const macCmdShiftL = {
+      key: 'L',
+      code: 'KeyL',
+      altKey: false,
+      shiftKey: true,
+      ctrlKey: false,
+      metaKey: true,
+    } as KeyboardEvent;
+    expect(matchesHotkey(macCmdShiftL, 'Command+Shift+L')).toBe(true);
+    expect(matchesHotkey(macCmdShiftL, 'Alt+Shift+L')).toBe(false);
   });
 });
 
